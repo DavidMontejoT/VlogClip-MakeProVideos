@@ -1,0 +1,24 @@
+.DS_Store
+Thumbs.db
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.part
+*.ytdl
+
+# Shell script outputs (local only)
+# clip.conf is committed (example config, no credentials)
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# yt-clipper app
+yt-clipper/cache/
+yt-clipper/uploads/
+yt-clipper/output/

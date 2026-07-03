@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT Clipper</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <span class="logo">✂️ YT Clipper</span>
+    <span class="badge">MVP</span>
+  </div>
+  <nav class="header-nav">
+    <button class="tab active" data-tab="youtube">🎬 YouTube</button>
+    <button class="tab" data-tab="subtitles">💬 Subtitles</button>
+    <button class="tab" data-tab="editor">✂️ Editor</button>
+  </nav>
+  <div class="header-right">
+    <button class="btn btn-ghost" id="btnDeps" title="Check dependencies">🔧</button>
+    <a href="https://github.com" class="btn btn-ghost" target="_blank" title="GitHub">⭐</a>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- TAB: YouTube -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section class="tab-content active" id="tab-youtube">
+
+  <div class="url-section">
+    <div class="url-bar">
+      <input type="text" id="urlInput" placeholder="Paste a YouTube URL here..." autofocus>
+      <button class="btn btn-primary" id="btnLoad">Load Video</button>
+    </div>
+    <div id="urlError" class="error-msg hidden"></div>
+  </div>
+
+  <div id="app" class="hidden">
+
+    <div class="video-info-bar">
+      <div class="video-title" id="videoTitle"></div>
+      <div class="video-meta">
+        <span id="videoDuration"></span>
+        <span id="videoChapters"></span>
+      </div>
+    </div>
+
+    <div class="main-layout">
+      <div class="explorer-panel">
+        <div class="explorer-toolbar">
+          <span class="explorer-title">📷 Storyboard Timeline</span>
+          <div class="explorer-controls">
+            <label>Quality:</label>
+            <select id="sbQuality">
+              <option value="sb0">High (320×180)</option>
+              <option value="sb1">Medium (160×90)</option>
+              <option value="sb2">Low (80×45)</option>
+            </select>
+            <button class="btn btn-sm" id="btnRefreshSB">Refresh</button>
+          </div>
+        </div>
+        <div class="progress-bar-wrap hidden" id="sbProgressWrap">
+          <div class="progress-bar"><div class="progress-fill" id="sbProgressFill"></div></div>
+          <span class="progress-text" id="sbProgressText"></span>
+        </div>
+        <div class="storyboard-grid" id="storyboardGrid">
+          <div class="placeholder-msg">
+            <div class="placeholder-icon">🎬</div>
+            <p>Paste a YouTube URL and click <strong>Load Video</strong></p>
+          </div>
+        </div>
+        <div class="selection-bar hidden" id="selectionBar">
+          <span class="sel-label">Selected:</span>
+          <span class="sel-range" id="selRange">—</span>
+          <button class="btn btn-sm btn-accent" id="btnAddClip">+ Add Clip</button>
+          <button class="btn btn-sm btn-ghost" id="btnClearSel">Clear</button>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="sidebar-section">
+          <h3>📋 Clip Queue <span class="badge-count" id="clipCount">0</span></h3>
+          <div class="clip-list" id="clipList">
+            <div class="empty-hint">Select a range on the timeline and click <strong>+ Add Clip</strong></div>
+          </div>
+          <div class="clip-actions hidden" id="clipActions">
+            <label>Quality:</label>
+            <select id="extractQuality">
+              <option value="bestvideo+bestaudio">Best (1080p)</option>
+              <option value="best">Standard (720p)</option>
+              <option value="worst">Fast preview</option>
+            </select>
+            <button class="btn btn-primary btn-full" id="btnExtract">⚡ Extract All Clips</button>
+            <button class="btn btn-ghost btn-full hidden" id="btnClearClips">Clear All</button>
+          </div>
+        </div>
+        <div class="sidebar-section hidden" id="jobSection">
+          <h3>📦 Job Status</h3>
+          <div class="job-info" id="jobInfo"></div>
+          <div class="job-files" id="jobFiles"></div>
+          <button class="btn btn-sm btn-full hidden" id="btnOpenOutput">📂 Open Output Folder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- TAB: Subtitles -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section class="tab-content" id="tab-subtitles">
+
+  <!-- Phase 1: Upload & Transcribe -->
+  <div id="subPhase1">
+    <div class="subtitle-layout">
+      <div class="sub-panel">
+        <h2>💬 Auto Subtitles</h2>
+        <p class="sub-desc">Upload a clip, transcribe with Whisper AI, then edit position and style before exporting.</p>
+
+        <div class="sub-file-input">
+          <label>Video file:</label>
+          <div class="drop-zone" id="subDropZone">
+            <div class="drop-icon">📁</div>
+            <p>Drag & drop a video here, or click to browse</p>
+            <p class="drop-hint">MP4, MOV, AVI, MKV — up to 2GB</p>
+            <input type="file" id="subFileInput" accept="video/*" hidden>
+          </div>
+          <div class="upload-status hidden" id="subUploadStatus"></div>
+          <div class="file-picker hidden" id="subPathRow">
+            <input type="text" id="subVideoPath" placeholder="/path/to/video.mp4" readonly>
+            <button class="btn btn-sm btn-ghost" id="btnClearSub">✕</button>
+          </div>
+        </div>
+
+        <div class="sub-opts">
+          <label>Whisper model:</label>
+          <select id="subModel">
+            <option value="tiny">Tiny (fastest)</option>
+            <option value="base">Base</option>
+            <option value="small">Small</option>
+            <option value="medium" selected>Medium (balanced)</option>
+            <option value="large">Large (best)</option>
+          </select>
+          <label>Language:</label>
+          <select id="subLanguage">
+            <option value="es" selected>Spanish</option>
+            <option value="en">English</option>
+            <option value="pt">Portuguese</option>
+            <option value="fr">French</option>
+            <option value="auto">Auto-detect</option>
+          </select>
+        </div>
+
+        <button class="btn btn-primary btn-full" id="btnTranscribe">🎙️ Transcribe</button>
+        <div class="sub-status hidden" id="subStatus"></div>
+      </div>
+
+      <div class="sub-preview-panel hidden" id="subPreviewPanel">
+        <h3>📝 Transcript Preview</h3>
+        <div class="sub-transcript" id="subTranscript"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2: Visual Subtitle Editor -->
+  <div id="subPhase2" class="hidden">
+    <div class="sub-editor-topbar">
+      <button class="btn btn-ghost btn-sm" id="btnBackSub">← Back</button>
+      <span class="sub-editor-title">Subtitle Editor</span>
+      <button class="btn btn-primary" id="btnExportSubs">Export & Burn</button>
+    </div>
+
+    <div class="sub-editor-body">
+
+      <!-- Left: Video Preview + Style Controls -->
+      <div class="sub-video-col">
+        <div class="sub-video-wrap" id="subVideoWrap">
+          <video id="subVideo" playsinline preload="metadata"></video>
+          <div class="sub-subtitle-overlay">
+            <div class="sub-drag-handle" id="subDragHandle">
+              <span id="subPreviewText"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-playback-bar">
+          <button id="subPlayBtn" class="btn btn-sm sub-play-btn">&#9654;</button>
+          <input type="range" id="subSeekBar" min="0" max="1000" value="0" step="1">
+          <span id="subTimeLabel" class="sub-time-label">0:00</span>
+        </div>
+
+        <div class="sub-style-panel">
+          <div class="sub-style-row">
+            <label>Style</label>
+            <div class="sub-presets" id="subPresets"></div>
+          </div>
+          <div class="sub-style-row">
+            <label>Size</label>
+            <input type="range" id="subFontSizeSlider" min="12" max="52" value="24" step="2">
+            <span id="subFontSizeLabel" class="sub-style-val">24</span>
+          </div>
+          <div class="sub-style-row">
+            <label>Color</label>
+            <input type="color" id="subColorPicker" value="#ffffff">
+          </div>
+          <div class="sub-style-row">
+            <label>Quick pos</label>
+            <div class="sub-pos-presets">
+              <button class="btn btn-sm sub-pos-btn" data-y="0.12">Top</button>
+              <button class="btn btn-sm sub-pos-btn" data-y="0.5">Middle</button>
+              <button class="btn btn-sm sub-pos-btn sub-pos-active" data-y="0.85">Bottom</button>
+            </div>
+          </div>
+          <p class="sub-drag-hint">Drag the subtitle on the video to reposition</p>
+        </div>
+      </div>
+
+      <!-- Right: Editable Transcript -->
+      <div class="sub-transcript-col">
+        <div class="sub-transcript-header">
+          <h3>Transcript</h3>
+          <span id="subSegCount" class="badge-count">0</span>
+          <span class="sub-transcript-hint">Click timestamp to seek &middot; Edit text inline</span>
+        </div>
+        <div class="sub-segments-list" id="subSegmentsList"></div>
+      </div>
+
+    </div>
+
+    <div id="subExportStatus" class="sub-status hidden sub-export-status"></div>
+  </div>
+
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- TAB: Editor -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<section class="tab-content" id="tab-editor">
+  <div class="editor-layout">
+    <div class="editor-top">
+      <h2>✂️ Local Video Editor</h2>
+      <p class="sub-desc">Load a downloaded video, browse thumbnails, and cut clips.</p>
+
+      <div class="drop-zone" id="editorDropZone">
+        <div class="drop-icon">📁</div>
+        <p>Drag & drop a video here, or click to browse</p>
+        <p class="drop-hint">MP4, MOV, AVI, MKV — up to 2GB</p>
+        <input type="file" id="editorFileInput" accept="video/*" hidden>
+      </div>
+      <div class="upload-status hidden" id="editorUploadStatus"></div>
+      <div class="file-picker hidden" id="editorPathRow">
+        <input type="text" id="editorVideoPath" placeholder="/path/to/video.mp4" readonly>
+        <button class="btn btn-primary" id="btnLoadLocal">Load Video</button>
+        <button class="btn btn-sm btn-ghost" id="btnClearEditor">✕</button>
+      </div>
+    </div>
+
+    <div class="editor-main hidden" id="editorMain">
+      <div class="editor-info" id="editorInfo"></div>
+
+      <div class="editor-controls">
+        <label>Thumbnail interval:</label>
+        <select id="editorInterval">
+          <option value="5">Every 5s</option>
+          <option value="10" selected>Every 10s</option>
+          <option value="30">Every 30s</option>
+          <option value="60">Every 1min</option>
+        </select>
+        <button class="btn btn-sm" id="btnGenThumbs">Generate Thumbnails</button>
+        <span class="editor-hint hidden" id="editorThumbStatus"></span>
+        <button class="btn btn-sm btn-accent" id="btnAnalyze" style="margin-left:auto">🧠 Find Best Clips</button>
+      </div>
+
+      <div class="analyze-panel hidden" id="analyzePanel">
+        <div class="analyze-header">
+          <h3>🧠 Smart Picks</h3>
+          <span class="analyze-status" id="analyzeStatus"></span>
+        </div>
+        <div class="analyze-clips" id="analyzeClips"></div>
+      </div>
+
+      <div class="editor-timeline" id="editorTimeline">
+        <div class="placeholder-msg">
+          <div class="placeholder-icon">🖼️</div>
+          <p>Load a video and click <strong>Generate Thumbnails</strong></p>
+        </div>
+      </div>
+
+      <div class="editor-selection hidden" id="editorSelection">
+        <span>Selection: </span>
+        <span class="sel-range" id="editorSelRange">—</span>
+        <input type="text" id="editorClipLabel" placeholder="Clip name" class="clip-name-input">
+        <button class="btn btn-sm btn-accent" id="btnEditorCut">✂️ Cut Clip</button>
+        <button class="btn btn-sm btn-ghost" id="btnEditorClear">Clear</button>
+      </div>
+
+      <div class="editor-clips" id="editorClips">
+        <h3>Cut Clips <span class="badge-count" id="editorClipCount">0</span></h3>
+        <div class="clip-list" id="editorClipList">
+          <div class="empty-hint">Select thumbnails to define a range, then click <strong>Cut Clip</strong></div>
+        </div>
+        <button class="btn btn-sm hidden" id="btnEditorOpenOut">📂 Open Output</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Toast -->
+<div class="toast hidden" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
