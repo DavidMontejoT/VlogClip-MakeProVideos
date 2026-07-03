@@ -461,7 +461,7 @@ let subVideoPath = "";
 let subUploadedFilename = "";
 let subSegments = [];
 let subKaraokeMode = false;
-let subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00" };
+let subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00", animation: "none" };
 let subDragging = false;
 let subDragOffset = { x: 0, y: 0 };
 let subActiveSegIndex = -1;
@@ -556,7 +556,8 @@ function showSubEditor() {
   vid.src = `/api/uploads/${subUploadedFilename}`;
   vid.load();
 
-  subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00" };
+  subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00", animation: "none" };
+  $$(".sub-anim-btn").forEach(b => b.classList.toggle("sub-anim-active", b.dataset.anim === "none"));
   $("#subHighlightRow").classList.toggle("hidden", !subKaraokeMode);
   renderSubPresets();
   updateSubOverlayPosition();
@@ -679,6 +680,7 @@ function syncSubtitleOverlay() {
     if (activeIdx >= 0) {
       const el = $(`.sub-seg-item[data-idx="${activeIdx}"]`);
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      triggerSubtitleAnimation();
     }
   }
 }
@@ -798,6 +800,24 @@ document.querySelectorAll(".sub-pos-btn").forEach(btn => {
   });
 });
 
+document.querySelectorAll(".sub-anim-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".sub-anim-btn").forEach(b => b.classList.remove("sub-anim-active"));
+    btn.classList.add("sub-anim-active");
+    subStyle.animation = btn.dataset.anim;
+    triggerSubtitleAnimation();
+  });
+});
+
+function triggerSubtitleAnimation() {
+  const handle = $("#subDragHandle");
+  handle.classList.remove("sub-anim-fade", "sub-anim-slide", "sub-anim-pop");
+  void handle.offsetWidth; // force reflow to restart animation
+  if (subStyle.animation && subStyle.animation !== "none") {
+    handle.classList.add(`sub-anim-${subStyle.animation}`);
+  }
+}
+
 // ── Transcript Segment Editor ─────────────────────────────
 
 function renderSubSegments() {
@@ -858,6 +878,7 @@ $("#btnExportSubs").addEventListener("click", async () => {
     border_style: subStyle.border_style || 1,
     back_color: subStyle.back_color || null,
     back_alpha: subStyle.back_alpha || 0,
+    animation: subStyle.animation || "none",
   };
 
   try {

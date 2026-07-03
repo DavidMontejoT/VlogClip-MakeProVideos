@@ -630,6 +630,33 @@ body {
   background: var(--bg-secondary); border: 1px solid var(--border);
 }
 
+/* ── Animation buttons ──────────────────── */
+.sub-anim-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+.sub-anim-btn     { font-size: 11px !important; }
+.sub-anim-active  {
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
+}
+
+/* ── Subtitle preview animations ────────── */
+@keyframes sub-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes sub-slide {
+  from { transform: translate(-50%, calc(-50% + 20px)); opacity: 0; }
+  to   { transform: translate(-50%, -50%); opacity: 1; }
+}
+@keyframes sub-pop {
+  0%   { transform: translate(-50%, -50%) scale(0.1); opacity: 0; }
+  70%  { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+.sub-drag-handle.sub-anim-fade  { animation: sub-fade  .35s ease forwards; }
+.sub-drag-handle.sub-anim-slide { animation: sub-slide .35s ease forwards; }
+.sub-drag-handle.sub-anim-pop   { animation: sub-pop   .4s cubic-bezier(.22,1,.36,1) forwards; }
+
 /* ── Responsive ─────────────────────────── */
 @media (max-width: 768px) {
   .main-layout { grid-template-columns: 1fr; }

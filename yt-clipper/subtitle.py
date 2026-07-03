@@ -58,6 +58,28 @@ def hex_to_ass(hex_color: str) -> str:
     return f"&H00{b}{g}{r}".upper()
 
 
+def _make_event_tag(animation: str, pos_x_pct, pos_y_pct,
+                    video_width: int, video_height: int) -> str:
+    """Build the ASS override tag block with position + optional animation."""
+    eff_x = pos_x_pct if pos_x_pct is not None else 0.5
+    eff_y = pos_y_pct if pos_y_pct is not None else 0.85
+    x = int(eff_x * video_width)
+    y = int(eff_y * video_height)
+    has_pos = pos_x_pct is not None and pos_y_pct is not None
+
+    if animation == "fade":
+        return f"{{\\an5\\pos({x},{y})\\fad(200,150)}}"
+    elif animation == "slide":
+        y_start = y + max(20, int(0.025 * video_height))
+        return f"{{\\an5\\move({x},{y_start},{x},{y})\\fad(200,0)}}"
+    elif animation == "pop":
+        # scale from 1% to 100% over 250ms, then fade out last 120ms
+        return f"{{\\an5\\pos({x},{y})\\fscx1\\fscy1\\t(0,250,\\fscx100\\fscy100)\\fad(0,120)}}"
+    elif has_pos:
+        return f"{{\\an5\\pos({x},{y})}}"
+    return ""
+
+
 def get_video_dimensions(video_path: str) -> tuple[int, int]:
     """Get video width and height using ffprobe."""
     try:
@@ -128,13 +150,10 @@ def generate_ass_karaoke(segments: list[dict], output_path: str, style: dict = N
     highlight_color = style.get("highlight_color", "&H0000FFFF")  # active word (default: yellow)
     dim_color       = style.get("dim_color",       "&H80FFFFFF")  # inactive words (50% white)
 
+    animation = style.get("animation", "none")
     pos_x_pct = style.get("position_x_pct")
     pos_y_pct = style.get("position_y_pct")
-    pos_tag = ""
-    if pos_x_pct is not None and pos_y_pct is not None:
-        x = int(pos_x_pct * video_width)
-        y = int(pos_y_pct * video_height)
-        pos_tag = f"{{\\an5\\pos({x},{y})}}"
+    pos_tag = _make_event_tag(animation, pos_x_pct, pos_y_pct, video_width, video_height)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -222,10 +241,11 @@ def generate_ass(segments: list[dict], output_path: str, style: dict = None,
     else:
         back_color_ass = "&H00000000"
 
-    # Custom position from browser editor (0.0-1.0 fraction of video dimensions)
+    # Position + animation tag (handles custom pos, animations, or default layout)
+    animation = style.get("animation", "none")
     pos_x_pct = style.get("position_x_pct")
     pos_y_pct = style.get("position_y_pct")
-    has_custom_pos = pos_x_pct is not None and pos_y_pct is not None
+    event_tag = _make_event_tag(animation, pos_x_pct, pos_y_pct, video_width, video_height)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -245,13 +265,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         start = fmt_ass(seg["start"])
         end = fmt_ass(seg["end"])
         text = build_ass_text(seg["text"])
-
-        if has_custom_pos:
-            x_abs = int(pos_x_pct * video_width)
-            y_abs = int(pos_y_pct * video_height)
-            # \an5 = center-center anchor, \pos(x,y) = absolute position in PlayRes coords
-            text = "{\\an5\\pos(" + str(x_abs) + "," + str(y_abs) + ")}" + text
-
+        if event_tag:
+            text = event_tag + text
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
     with open(output_path, "w", encoding="utf-8") as f:
