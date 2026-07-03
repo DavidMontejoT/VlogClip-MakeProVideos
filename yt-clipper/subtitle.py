@@ -74,22 +74,131 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
     return 1080, 1920  # default (vertical video)
 
 
-def transcribe(video_path: str, model_size: str = None, language: str = None) -> list[dict]:
+def transcribe(video_path: str, model_size: str = None, language: str = None,
+               word_timestamps: bool = False) -> list[dict]:
     """Transcribe audio and return segments with timestamps."""
     from faster_whisper import WhisperModel
     model_name = model_size or WHISPER_MODEL
     lang = language or LANGUAGE
     print(f"Transcribing with {model_name} model...")
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(video_path, language=lang, vad_filter=True)
+    segments, _ = model.transcribe(video_path, language=lang, vad_filter=True,
+                                   word_timestamps=word_timestamps)
     result = []
     for seg in segments:
-        result.append({
+        entry = {
             "start": round(seg.start, 2),
             "end": round(seg.end, 2),
             "text": seg.text.strip(),
-        })
+        }
+        if word_timestamps and seg.words:
+            entry["words"] = [
+                {"word": w.word.strip(), "start": round(w.start, 3), "end": round(w.end, 3)}
+                for w in seg.words if w.word.strip()
+            ]
+        result.append(entry)
     return result
+
+
+def generate_ass_karaoke(segments: list[dict], output_path: str, style: dict = None,
+                         video_width: int = 1080, video_height: int = 1920) -> str:
+    """
+    Generate ASS with word-by-word highlighting (CapCut karaoke effect).
+    Each word gets its own Dialogue event showing the full sentence,
+    with the active word in highlight color and the rest dimmed.
+    Segments without word data fall back to regular subtitles.
+    """
+    style = style or {}
+    font_size = style.get("font_size", FONT_SIZE)
+    margin_v = style.get("margin_v", MARGIN_V)
+    outline_color = style.get("outline_color", OUTLINE_COLOR)
+    outline_width = style.get("outline_width", OUTLINE_WIDTH)
+    border_style = style.get("border_style", 1)
+
+    back_color_hex = style.get("back_color")
+    if back_color_hex:
+        h = back_color_hex.lstrip("#")
+        r, g, b = h[0:2], h[2:4], h[4:6]
+        aa = format(int(style.get("back_alpha", 0.0) * 255), '02X')
+        back_color_ass = f"&H{aa}{b}{g}{r}".upper()
+    else:
+        back_color_ass = "&H00000000"
+
+    primary_color   = style.get("primary_color",   "&H00FFFFFF")  # normal word color
+    highlight_color = style.get("highlight_color", "&H0000FFFF")  # active word (default: yellow)
+    dim_color       = style.get("dim_color",       "&H80FFFFFF")  # inactive words (50% white)
+
+    pos_x_pct = style.get("position_x_pct")
+    pos_y_pct = style.get("position_y_pct")
+    pos_tag = ""
+    if pos_x_pct is not None and pos_y_pct is not None:
+        x = int(pos_x_pct * video_width)
+        y = int(pos_y_pct * video_height)
+        pos_tag = f"{{\\an5\\pos({x},{y})}}"
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {video_width}
+PlayResY: {video_height}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,40,40,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+    def build_word_line(words: list[dict], active_idx: int) -> str:
+        parts = []
+        for j, w in enumerate(words):
+            color = highlight_color if j == active_idx else dim_color
+            parts.append(f"{{\\1c{color}}}{w['word']}")
+        return pos_tag + " ".join(parts)
+
+    dialogue_lines = []
+
+    for seg in segments:
+        words = seg.get("words") or []
+
+        if not words:
+            # No word data — regular subtitle
+            start = fmt_ass(seg["start"])
+            end = fmt_ass(seg["end"])
+            text = build_ass_text(seg["text"])
+            if pos_tag:
+                text = pos_tag + text
+            dialogue_lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+            continue
+
+        # Gap before first word (show all dim)
+        if seg["start"] < words[0]["start"] - 0.05:
+            all_dim = " ".join(f"{{\\1c{dim_color}}}{w['word']}" for w in words)
+            dialogue_lines.append(
+                f"Dialogue: 0,{fmt_ass(seg['start'])},{fmt_ass(words[0]['start'])},"
+                f"Default,,0,0,0,,{pos_tag}{all_dim}"
+            )
+
+        # One event per word
+        for i, w in enumerate(words):
+            text = build_word_line(words, i)
+            dialogue_lines.append(
+                f"Dialogue: 0,{fmt_ass(w['start'])},{fmt_ass(w['end'])},Default,,0,0,0,,{text}"
+            )
+
+        # Trailing gap after last word (show all in primary color)
+        if words[-1]["end"] < seg["end"] - 0.05:
+            all_normal = " ".join(f"{{\\1c{primary_color}}}{w['word']}" for w in words)
+            dialogue_lines.append(
+                f"Dialogue: 0,{fmt_ass(words[-1]['end'])},{fmt_ass(seg['end'])},"
+                f"Default,,0,0,0,,{pos_tag}{all_normal}"
+            )
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(header)
+        f.write("\n".join(dialogue_lines))
+    return output_path
 
 
 def generate_ass(segments: list[dict], output_path: str, style: dict = None,
@@ -183,7 +292,11 @@ def process_video(video_path: str, output_path: str = None, model_size: str = No
     segments = segments_override if segments_override else transcribe(video_path, model_size, language)
 
     w, h = get_video_dimensions(video_path)
-    generate_ass(segments, ass_path, style=style, video_width=w, video_height=h)
+    has_word_data = any(seg.get("words") for seg in segments)
+    if has_word_data:
+        generate_ass_karaoke(segments, ass_path, style=style, video_width=w, video_height=h)
+    else:
+        generate_ass(segments, ass_path, style=style, video_width=w, video_height=h)
     burn_subtitles(video_path, ass_path, output_path)
     try:
         os.remove(ass_path)

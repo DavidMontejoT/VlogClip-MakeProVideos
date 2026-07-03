@@ -460,7 +460,8 @@ const SUB_PRESETS = [
 let subVideoPath = "";
 let subUploadedFilename = "";
 let subSegments = [];
-let subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0 };
+let subKaraokeMode = false;
+let subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00" };
 let subDragging = false;
 let subDragOffset = { x: 0, y: 0 };
 let subActiveSegIndex = -1;
@@ -500,7 +501,11 @@ $("#btnTranscribe").addEventListener("click", async () => {
   $("#subPreviewPanel").classList.add("hidden");
 
   try {
-    const result = await api("/api/subtitle/transcribe", { path: subVideoPath, model, language });
+    subKaraokeMode = $("#subKaraokeToggle").checked;
+    const result = await api("/api/subtitle/transcribe", {
+      path: subVideoPath, model, language,
+      word_timestamps: subKaraokeMode,
+    });
     if (result.error) {
       $("#subStatus").innerHTML = `<span style="color:var(--red)">${result.error}</span>`;
       btn.disabled = false; btn.textContent = "Transcribe";
@@ -551,7 +556,8 @@ function showSubEditor() {
   vid.src = `/api/uploads/${subUploadedFilename}`;
   vid.load();
 
-  subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0 };
+  subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00" };
+  $("#subHighlightRow").classList.toggle("hidden", !subKaraokeMode);
   renderSubPresets();
   updateSubOverlayPosition();
   updateSubOverlayStyle();
@@ -645,7 +651,25 @@ function syncSubtitleOverlay() {
     if (t >= subSegments[i].start && t <= subSegments[i].end) { activeIdx = i; break; }
   }
 
-  $("#subPreviewText").textContent = activeIdx >= 0 ? subSegments[activeIdx].text : "";
+  const previewEl = $("#subPreviewText");
+  const seg = activeIdx >= 0 ? subSegments[activeIdx] : null;
+
+  if (!seg) {
+    previewEl.innerHTML = "";
+  } else if (subKaraokeMode && seg.words && seg.words.length > 0) {
+    // Word-by-word karaoke preview
+    const activeWord = seg.words.find(w => t >= w.start && t <= w.end);
+    const hlColor = subStyle.highlight_color || "#ffdd00";
+    const html = seg.words.map(w => {
+      const isActive = activeWord && w.start === activeWord.start;
+      return isActive
+        ? `<span style="color:${hlColor}">${w.word}</span>`
+        : `<span style="opacity:0.5">${w.word}</span>`;
+    }).join(" ");
+    previewEl.innerHTML = html;
+  } else {
+    previewEl.textContent = seg.text;
+  }
 
   if (activeIdx !== subActiveSegIndex) {
     subActiveSegIndex = activeIdx;
@@ -761,6 +785,10 @@ $("#subColorPicker").addEventListener("input", (e) => {
   updateSubOverlayStyle();
 });
 
+$("#subHighlightPicker").addEventListener("input", (e) => {
+  subStyle.highlight_color = e.target.value;
+});
+
 document.querySelectorAll(".sub-pos-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".sub-pos-btn").forEach(b => b.classList.remove("sub-pos-active"));
@@ -791,7 +819,8 @@ function renderSubSegments() {
     const textEl = div.querySelector(".sub-seg-text");
     textEl.addEventListener("input", () => {
       subSegments[i].text = textEl.textContent.trim();
-      if (subActiveSegIndex === i) $("#subPreviewText").textContent = subSegments[i].text;
+      subSegments[i].words = [];  // word timing becomes stale after manual edit
+      if (subActiveSegIndex === i) syncSubtitleOverlay();
     });
     textEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); textEl.blur(); }
@@ -821,8 +850,10 @@ $("#btnExportSubs").addEventListener("click", async () => {
     font_size: subStyle.font_size,
     position_x_pct: subStyle.position_x_pct,
     position_y_pct: subStyle.position_y_pct,
-    primary_color: hexToAss(subStyle.font_color || "#ffffff"),
-    outline_color: hexToAss(subStyle.outline_color || "#000000"),
+    primary_color:   hexToAss(subStyle.font_color      || "#ffffff"),
+    outline_color:   hexToAss(subStyle.outline_color   || "#000000"),
+    highlight_color: hexToAss(subStyle.highlight_color || "#ffdd00"),
+    dim_color: "&H80FFFFFF",
     outline_width: subStyle.outline_width ?? 2.5,
     border_style: subStyle.border_style || 1,
     back_color: subStyle.back_color || null,

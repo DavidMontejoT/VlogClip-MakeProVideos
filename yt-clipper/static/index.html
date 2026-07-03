@@ -154,6 +154,17 @@
           </select>
         </div>
 
+        <div class="sub-karaoke-row">
+          <label class="sub-toggle-wrap">
+            <input type="checkbox" id="subKaraokeToggle">
+            <span class="sub-toggle-slider"></span>
+          </label>
+          <div class="sub-karaoke-label">
+            <strong>Word-by-word karaoke</strong>
+            <span>Each word highlights as it's spoken (like CapCut)</span>
+          </div>
+        </div>
+
         <button class="btn btn-primary btn-full" id="btnTranscribe">🎙️ Transcribe</button>
         <div class="sub-status hidden" id="subStatus"></div>
       </div>
@@ -205,6 +216,11 @@
           <div class="sub-style-row">
             <label>Color</label>
             <input type="color" id="subColorPicker" value="#ffffff">
+          </div>
+          <div class="sub-style-row hidden" id="subHighlightRow">
+            <label>Highlight</label>
+            <input type="color" id="subHighlightPicker" value="#ffdd00">
+            <span class="sub-drag-hint">active word color</span>
           </div>
           <div class="sub-style-row">
             <label>Quick pos</label>

@@ -431,19 +431,21 @@ def subtitle_transcribe():
     video_path = data.get("path", "").strip()
     model_size = data.get("model", "medium")
     language = data.get("language", "es")
+    word_timestamps = data.get("word_timestamps", False)
 
     if not video_path or not Path(video_path).exists():
         return jsonify({"error": "Video file not found"}), 400
 
     job_id = str(int(time.time() * 1000))
+    mode_label = "word-by-word" if word_timestamps else "standard"
     with jobs_lock:
-        jobs[job_id] = {"status": "running", "current": "Loading Whisper model...", "result": None}
+        jobs[job_id] = {"status": "running", "current": f"Loading Whisper model ({mode_label})...", "result": None}
 
     def do_transcribe():
         try:
             with jobs_lock:
                 jobs[job_id]["current"] = "Transcribing audio..."
-            segs = transcribe(video_path, model_size, language)
+            segs = transcribe(video_path, model_size, language, word_timestamps=word_timestamps)
             with jobs_lock:
                 jobs[job_id] = {"status": "done", "result": {"segments": segs, "count": len(segs)}}
         except Exception as e:
