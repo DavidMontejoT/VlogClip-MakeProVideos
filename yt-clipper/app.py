@@ -49,12 +49,20 @@ def safe_video_path(user_path: str) -> Path:
 
 
 def safe_output_path(user_path: str) -> Path:
-    """Resolve a user-supplied output path into OUTPUT_DIR."""
+    """Resolve a user-supplied output path into OUTPUT_DIR (must exist)."""
     p = (OUTPUT_DIR / Path(user_path).name).resolve()
     if not str(p).startswith(str(OUTPUT_DIR.resolve())):
         raise ValueError("Path fuera del directorio de output")
     if not p.exists():
         raise FileNotFoundError(user_path)
+    return p
+
+
+def safe_output_dest(filename: str) -> Path:
+    """Resolve a filename into OUTPUT_DIR for writing (may not exist yet)."""
+    p = (OUTPUT_DIR / Path(filename).name).resolve()
+    if not str(p).startswith(str(OUTPUT_DIR.resolve())):
+        raise ValueError("Filename fuera del directorio de output")
     return p
 
 # ── In-memory job tracking ────────────────────────────────
@@ -1084,21 +1092,18 @@ def _cmd_enhance_audio(video_path: str, timestamp: str, job_id: str) -> dict:
 
     outfile = OUTPUT_DIR / f"{timestamp}_voz_mejorada.mp4"
 
-    # Professional voice enhancement chain:
-    # 1. highpass=80   → cut sub-bass rumble (<80Hz)
-    # 2. lowpass=8000  → reduce hiss (>8kHz, voice range is ~85-255Hz fundamental, up to ~8kHz harmonics)
-    # 3. afftdn=nr=25  → FFT noise reduction (25 = moderate, 10-90 range)
-    # 4. compand       → voice compressor for presence
-    #    attacks=0.1, decays=0.3  → fast response for speech
-    #    points=-80/-80|-30/-18|-15/-8|0/-3  → expander below -30dB, compressor above
-    #    gain=6 → 6dB makeup gain
-    # 5. loudnorm       → EBU R128 broadcast standard (-16 LUFS for YouTube)
+    # Professional voice enhancement chain (v2 — warm, natural):
+    # 1. highpass=80    → cut sub-bass rumble (<80Hz)
+    # 2. afftdn=nr=12   → gentle FFT noise reduction (default strength, avoids metallic artifacts)
+    # 3. acompressor    → downward compression (controls peaks without inflating background noise)
+    # 4. loudnorm       → EBU R128 broadcast standard (-16 LUFS for YouTube)
+    # 5. aresample=48k  → loudnorm internally upsamples to 192kHz, resample back to avoid AAC glitches
     audio_filter = (
         "highpass=f=80,"
-        "lowpass=f=8500,"
-        "afftdn=nr=25:nf=-25,"
-        "compand=attacks=0.1:decays=0.3:points=-80/-80|-30/-18|-15/-8|0/-3:gain=6:soft-knee=2,"
-        "loudnorm=I=-16:LRA=11:TP=-1.5"
+        "afftdn=nr=12:nf=-25,"
+        "acompressor=threshold=-18dB:ratio=3:attack=10:release=150:makeup=4,"
+        "loudnorm=I=-16:LRA=11:TP=-1.5,"
+        "aresample=48000"
     )
 
     with jobs_lock:
@@ -1120,9 +1125,9 @@ def _cmd_enhance_audio(video_path: str, timestamp: str, job_id: str) -> dict:
 
         audio_filter_fallback = (
             "highpass=f=80,"
-            "lowpass=f=8500,"
-            "compand=attacks=0.1:decays=0.3:points=-80/-80|-30/-18|-15/-8|0/-3:gain=6:soft-knee=2,"
-            "loudnorm=I=-16:LRA=11:TP=-1.5"
+            "acompressor=threshold=-18dB:ratio=3:attack=10:release=150:makeup=4,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5,"
+            "aresample=48000"
         )
         rc, stdout, stderr = run([
             "ffmpeg", "-y",
@@ -1141,13 +1146,13 @@ def _cmd_enhance_audio(video_path: str, timestamp: str, job_id: str) -> dict:
             "output": str(outfile),
             "filename": outfile.name,
             "size_mb": round(new_size, 1),
-            "message": "Audio de voz mejorado: reducción de ruido + ecualización + compresión + normalización",
+            "message": "Audio de voz mejorado: reducción de ruido suave + compresión natural + normalización",
             "details": [
-                "🔇 Ruido de fondo reducido (FFT denoise)",
+                "🔇 Ruido de fondo reducido (FFT denoise nr=12, sin artefactos metálicos)",
                 "🎚️ Sub-graves eliminados (<80Hz)",
-                "🎚️ Silbidos reducidos (>8.5kHz)",
-                "📢 Voz comprimida y realzada (+6dB presencia)",
+                "📢 Compresión descendente (controla picos, no infla el ruido)",
                 "📏 Normalizado a -16 LUFS (estándar YouTube)",
+                "🔊 Frecuencias altas conservadas (sin lowpass — voz natural)",
             ],
         }
     raise RuntimeError(stderr.strip()[-300:] or "Failed to enhance audio")
