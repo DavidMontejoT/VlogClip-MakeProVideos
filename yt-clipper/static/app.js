@@ -494,6 +494,21 @@ Object.defineProperty(window, 'editorVideoFilename', {
 });
 // Proxy editorSubs.segments / .karaoke / .activeIdx to active video
 const _activeIdx = { val: -1 };
+
+// Global subtitle style (shared, but each video stores its own segments)
+let editorSubs = {
+  style: {
+    position_x_pct: 0.5, position_y_pct: 0.85,
+    font_size: 24, font_color: "#ffffff",
+    outline_color: "#000000", outline_width: 2.5,
+    border_style: 1, back_color: null, back_alpha: 0,
+    highlight_color: "#ffdd00", animation: "none",
+    max_width_pct: 86,
+  },
+  dragging: false,
+  dragOffset: { x: 0, y: 0 },
+};
+
 Object.defineProperty(editorSubs, 'segments', {
   get() { return getSubsData().segments; },
   set(v) {
@@ -513,29 +528,29 @@ Object.defineProperty(editorSubs, 'activeIdx', {
   set(v) { _activeIdx.val = v; }
 });
 
-// Global subtitle style (shared, but each video stores its own segments)
-let editorSubs = {
-  style: {
-    position_x_pct: 0.5, position_y_pct: 0.85,
-    font_size: 24, font_color: "#ffffff",
-    outline_color: "#000000", outline_width: 2.5,
-    border_style: 1, back_color: null, back_alpha: 0,
-    highlight_color: "#ffdd00", animation: "none",
-    max_width_pct: 86,
-  },
-  dragging: false,
-  dragOffset: { x: 0, y: 0 },
-};
-
 // Convenience getter/setter for active video's subtitle data
 function getSubsData() {
   const v = getActiveVideo();
   return v ? v.subtitles : { segments: [], karaoke: false, transcribed: false };
 }
 
-// Setup drop zone — accept multiple files
-setupDropZone("editorDropZone", "editorFileInput", async (result) => {
-  await addVideoToEditor(result.path, result.filename);
+// Editor drop zone — click, drag & drop, multi-file
+const editorDZ = document.getElementById("editorDropZone");
+const editorFileInput = document.getElementById("editorFileInput");
+
+editorDZ.addEventListener("click", () => editorFileInput.click());
+editorDZ.addEventListener("dragover", e => { e.preventDefault(); editorDZ.classList.add("drag-over"); });
+editorDZ.addEventListener("dragleave", () => editorDZ.classList.remove("drag-over"));
+editorDZ.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  editorDZ.classList.remove("drag-over");
+  const files = Array.from(e.dataTransfer.files);
+  for (const file of files) await uploadAndAdd(file);
+});
+editorFileInput.addEventListener("change", async () => {
+  const files = Array.from(editorFileInput.files);
+  for (const file of files) await uploadAndAdd(file);
+  editorFileInput.value = "";
 });
 
 // "Add Video" button in infobar
@@ -547,31 +562,6 @@ $("#editorFileInput2").addEventListener("change", async () => {
   if (files.length > 0) {
     await addMultipleVideos(files);
     $("#editorFileInput2").value = "";
-  }
-});
-
-// Also support dropping multiple files on the main zone
-const origDropZoneHandler = document.getElementById("editorDropZone").ondrop;
-document.getElementById("editorFileInput").addEventListener("change", async () => {
-  const files = document.getElementById("editorFileInput").files;
-  if (files.length > 0) {
-    // Process all files
-    for (const file of files) {
-      await uploadAndAdd(file);
-    }
-    document.getElementById("editorFileInput").value = "";
-  }
-});
-
-// Override drop handler to support multiple files
-const editorDZ = document.getElementById("editorDropZone");
-editorDZ.addEventListener("drop", async (e) => {
-  e.preventDefault();
-  editorDZ.classList.remove("drag-over");
-  const files = Array.from(e.dataTransfer.files);
-  if (files.length === 0) return;
-  for (const file of files) {
-    await uploadAndAdd(file);
   }
 });
 
@@ -633,6 +623,7 @@ async function addVideoToEditor(path, filename) {
     // First video added — open workspace
     if (editorVideos.length === 1) {
       activeVideoId = video.id;
+      state.editorInfo = info;
       $("#editorDropState").classList.add("hidden");
       $("#editorWorkspace").classList.remove("hidden");
       loadActiveVideoIntoPlayer();
@@ -830,9 +821,10 @@ function renderMultiTrackTimeline() {
     if (v.info.duration > maxDuration) maxDuration = v.info.duration;
   });
 
-  // Store for ruler/playhead reference
-  if (!state.editorInfo || state.editorInfo.duration < maxDuration) {
-    state.editorInfo = { duration: maxDuration };
+  // Update duration for ruler/playhead reference (preserve path and other fields)
+  if (!state.editorInfo) state.editorInfo = {};
+  if (!state.editorInfo.duration || state.editorInfo.duration < maxDuration) {
+    state.editorInfo.duration = maxDuration;
   }
 
   container.innerHTML = editorVideos.map((v, i) => {
