@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YT Clipper</title>
+<title>ClipStudio</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,17 +11,14 @@
 <!-- Header -->
 <header class="header">
   <div class="header-left">
-    <span class="logo">✂️ YT Clipper</span>
-    <span class="badge">MVP</span>
+    <span class="logo">✂️ ClipStudio</span>
   </div>
   <nav class="header-nav">
     <button class="tab active" data-tab="youtube">🎬 YouTube</button>
-    <button class="tab" data-tab="subtitles">💬 Subtitles</button>
-    <button class="tab" data-tab="editor">✂️ Editor</button>
+    <button class="tab" data-tab="editor">🎞️ Editor</button>
   </nav>
   <div class="header-right">
-    <button class="btn btn-ghost" id="btnDeps" title="Check dependencies">🔧</button>
-    <a href="https://github.com" class="btn btn-ghost" target="_blank" title="GitHub">⭐</a>
+    <button class="btn btn-ghost btn-sm" id="btnDeps" title="Check dependencies">🔧 Deps</button>
   </div>
 </header>
 
@@ -109,305 +106,274 @@
 </section>
 
 <!-- ═══════════════════════════════════════════════════════ -->
-<!-- TAB: Subtitles -->
-<!-- ═══════════════════════════════════════════════════════ -->
-<section class="tab-content" id="tab-subtitles">
-
-  <!-- Phase 1: Upload & Transcribe -->
-  <div id="subPhase1">
-    <div class="subtitle-layout">
-      <div class="sub-panel">
-        <h2>💬 Auto Subtitles</h2>
-        <p class="sub-desc">Upload a clip, transcribe with Whisper AI, then edit position and style before exporting.</p>
-
-        <div class="sub-file-input">
-          <label>Video file:</label>
-          <div class="drop-zone" id="subDropZone">
-            <div class="drop-icon">📁</div>
-            <p>Drag & drop a video here, or click to browse</p>
-            <p class="drop-hint">MP4, MOV, AVI, MKV — up to 2GB</p>
-            <input type="file" id="subFileInput" accept="video/*" hidden>
-          </div>
-          <div class="upload-status hidden" id="subUploadStatus"></div>
-          <div class="file-picker hidden" id="subPathRow">
-            <input type="text" id="subVideoPath" placeholder="/path/to/video.mp4" readonly>
-            <button class="btn btn-sm btn-ghost" id="btnClearSub">✕</button>
-          </div>
-        </div>
-
-        <div class="sub-opts">
-          <label>Whisper model:</label>
-          <select id="subModel">
-            <option value="tiny">Tiny (fastest)</option>
-            <option value="base">Base</option>
-            <option value="small">Small</option>
-            <option value="medium" selected>Medium (balanced)</option>
-            <option value="large">Large (best)</option>
-          </select>
-          <label>Language:</label>
-          <select id="subLanguage">
-            <option value="es" selected>Spanish</option>
-            <option value="en">English</option>
-            <option value="pt">Portuguese</option>
-            <option value="fr">French</option>
-            <option value="auto">Auto-detect</option>
-          </select>
-        </div>
-
-        <div class="sub-karaoke-row">
-          <label class="sub-toggle-wrap">
-            <input type="checkbox" id="subKaraokeToggle">
-            <span class="sub-toggle-slider"></span>
-          </label>
-          <div class="sub-karaoke-label">
-            <strong>Word-by-word karaoke</strong>
-            <span>Each word highlights as it's spoken (like CapCut)</span>
-          </div>
-        </div>
-
-        <button class="btn btn-primary btn-full" id="btnTranscribe">🎙️ Transcribe</button>
-        <div class="sub-status hidden" id="subStatus"></div>
-      </div>
-
-      <div class="sub-preview-panel hidden" id="subPreviewPanel">
-        <h3>📝 Transcript Preview</h3>
-        <div class="sub-transcript" id="subTranscript"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Phase 2: Visual Subtitle Editor -->
-  <div id="subPhase2" class="hidden">
-    <div class="sub-editor-topbar">
-      <button class="btn btn-ghost btn-sm" id="btnBackSub">← Back</button>
-      <span class="sub-editor-title">Subtitle Editor</span>
-      <button class="btn btn-primary" id="btnExportSubs">Export & Burn</button>
-    </div>
-
-    <div class="sub-editor-body">
-
-      <!-- Left: Video Preview + Style Controls -->
-      <div class="sub-video-col">
-        <div class="sub-video-wrap" id="subVideoWrap">
-          <video id="subVideo" playsinline preload="metadata"></video>
-          <div class="sub-subtitle-overlay">
-            <div class="sub-drag-handle" id="subDragHandle">
-              <span id="subPreviewText"></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="sub-playback-bar">
-          <button id="subPlayBtn" class="btn btn-sm sub-play-btn">&#9654;</button>
-          <input type="range" id="subSeekBar" min="0" max="1000" value="0" step="1">
-          <span id="subTimeLabel" class="sub-time-label">0:00</span>
-        </div>
-
-        <div class="sub-style-panel">
-          <div class="sub-style-row">
-            <label>Style</label>
-            <div class="sub-presets" id="subPresets"></div>
-          </div>
-          <div class="sub-style-row">
-            <label>Size</label>
-            <input type="range" id="subFontSizeSlider" min="12" max="52" value="24" step="2">
-            <span id="subFontSizeLabel" class="sub-style-val">24</span>
-          </div>
-          <div class="sub-style-row">
-            <label>Color</label>
-            <input type="color" id="subColorPicker" value="#ffffff">
-          </div>
-          <div class="sub-style-row hidden" id="subHighlightRow">
-            <label>Highlight</label>
-            <input type="color" id="subHighlightPicker" value="#ffdd00">
-            <span class="sub-drag-hint">active word color</span>
-          </div>
-          <div class="sub-style-row">
-            <label>Quick pos</label>
-            <div class="sub-pos-presets">
-              <button class="btn btn-sm sub-pos-btn" data-y="0.12">Top</button>
-              <button class="btn btn-sm sub-pos-btn" data-y="0.5">Middle</button>
-              <button class="btn btn-sm sub-pos-btn sub-pos-active" data-y="0.85">Bottom</button>
-            </div>
-          </div>
-          <div class="sub-style-row">
-            <label>Animation</label>
-            <div class="sub-anim-presets">
-              <button class="btn btn-sm sub-anim-btn sub-anim-active" data-anim="none">None</button>
-              <button class="btn btn-sm sub-anim-btn" data-anim="fade">Fade</button>
-              <button class="btn btn-sm sub-anim-btn" data-anim="slide">Slide Up</button>
-              <button class="btn btn-sm sub-anim-btn" data-anim="pop">Pop</button>
-            </div>
-          </div>
-          <p class="sub-drag-hint">Drag the subtitle on the video to reposition</p>
-        </div>
-      </div>
-
-      <!-- Right: Editable Transcript -->
-      <div class="sub-transcript-col">
-        <div class="sub-transcript-header">
-          <h3>Transcript</h3>
-          <span id="subSegCount" class="badge-count">0</span>
-          <span class="sub-transcript-hint">Click timestamp to seek &middot; Edit text inline</span>
-        </div>
-        <div class="sub-segments-list" id="subSegmentsList"></div>
-      </div>
-
-    </div>
-
-    <div id="subExportStatus" class="sub-status hidden sub-export-status"></div>
-  </div>
-
-</section>
-
-<!-- ═══════════════════════════════════════════════════════ -->
-<!-- TAB: Editor -->
+<!-- TAB: Editor (FCP-style unified workspace)             -->
 <!-- ═══════════════════════════════════════════════════════ -->
 <section class="tab-content" id="tab-editor">
-  <div class="editor-layout">
-    <div class="editor-top">
-      <h2>✂️ Local Video Editor</h2>
-      <p class="sub-desc">Load a downloaded video, browse thumbnails, and cut clips.</p>
 
-      <div class="drop-zone" id="editorDropZone">
-        <div class="drop-icon">📁</div>
-        <p>Drag & drop a video here, or click to browse</p>
-        <p class="drop-hint">MP4, MOV, AVI, MKV — up to 2GB</p>
-        <input type="file" id="editorFileInput" accept="video/*" hidden>
+  <!-- DROP STATE — shown when no video loaded -->
+  <div class="editor-drop-state" id="editorDropState">
+    <div class="editor-drop-inner">
+      <div class="drop-headline">🎞️ Video Editor</div>
+      <p class="drop-subline">Upload up to 10 clips — drag to reorder on the timeline</p>
+      <div class="drop-zone editor-drop-zone" id="editorDropZone">
+        <div class="drop-icon">🎬</div>
+        <p>Drag & drop videos here, or click to browse</p>
+        <p class="drop-hint">MP4, MOV, AVI, MKV — up to 2GB each · max 10</p>
+        <input type="file" id="editorFileInput" accept="video/*" multiple hidden>
       </div>
-      <div class="upload-status hidden" id="editorUploadStatus"></div>
-      <div class="file-picker hidden" id="editorPathRow">
-        <input type="text" id="editorVideoPath" placeholder="/path/to/video.mp4" readonly>
-        <button class="btn btn-primary" id="btnLoadLocal">Load Video</button>
-        <button class="btn btn-sm btn-ghost" id="btnClearEditor">✕</button>
+    </div>
+  </div>
+
+  <!-- WORKSPACE — shown after video loaded -->
+  <div class="editor-workspace hidden" id="editorWorkspace">
+
+    <!-- Info bar -->
+    <div class="editor-infobar">
+      <div class="editor-infobar-meta" id="editorInfo"></div>
+      <div class="editor-infobar-actions">
+        <button class="btn btn-sm btn-ghost" id="btnAddMoreVideos">＋ Add Video</button>
+        <button class="btn btn-sm btn-ghost" id="btnClearEditor">✕ Close All</button>
+        <button class="btn btn-sm btn-primary" id="btnExportFinal" disabled>🚀 Export All</button>
       </div>
     </div>
 
-    <div class="editor-main hidden" id="editorMain">
-      <div class="editor-info" id="editorInfo"></div>
+    <!-- Main 3-column body -->
+    <div class="editor-body">
 
-      <!-- Video Preview + Subtitles -->
-      <div class="editor-video-sub hidden" id="editorVideoSub">
-        <div class="evs-layout">
-          <!-- Left: Video -->
-          <div class="evs-video-col">
-            <div class="evs-video-wrap" id="evsVideoWrap">
-              <video id="editorVideo" playsinline preload="metadata"></video>
-              <div class="evs-sub-overlay">
-                <div class="evs-drag-handle" id="evsDragHandle">
-                  <span id="evsPreviewText"></span>
-                </div>
-              </div>
-            </div>
-            <div class="evs-playback">
-              <button id="evsPlayBtn" class="btn btn-sm">▶</button>
-              <input type="range" id="evsSeekBar" min="0" max="1000" value="0" step="1">
-              <span id="evsTimeLabel" class="evs-time">0:00</span>
-            </div>
-            <div class="evs-style-mini">
-              <button class="btn btn-sm btn-accent" id="btnEditorTranscribe">🎙️ Transcribe</button>
-              <button class="btn btn-sm" id="btnEditorBurnSubs" disabled>📼 Burn Subtitles</button>
-              <span class="evs-style-sep">|</span>
-              <select id="evsModel" class="evs-sel-sm">
-                <option value="tiny">Tiny</option>
-                <option value="base">Base</option>
-                <option value="small">Small</option>
-                <option value="medium" selected>Medium</option>
-              </select>
-              <input type="range" id="evsFontSize" min="14" max="48" value="24" title="Font size" class="evs-range-sm">
-              <input type="color" id="evsFontColor" value="#ffffff" title="Color" class="evs-color-sm">
-              <button class="btn btn-sm sub-pos-btn evs-pos-btn" data-y="0.12" title="Top">⬆</button>
-              <button class="btn btn-sm sub-pos-btn evs-pos-btn sub-pos-active" data-y="0.85" title="Bottom">⬇</button>
-            </div>
+      <!-- ── LEFT SIDEBAR ── -->
+      <aside class="editor-sidebar">
+
+        <div class="sidebar-block">
+          <div class="sidebar-block-title">
+            🎬 Videos
+            <span class="badge-count" id="editorVideoCount">0</span>
           </div>
-          <!-- Right: Transcript -->
-          <div class="evs-transcript-col">
-            <div class="evs-transcript-list" id="evsTranscript">
-              <div class="empty-hint">Click <strong>🎙️ Transcribe</strong> to generate subtitles</div>
-            </div>
+          <div id="editorVideoList" class="video-list-sidebar">
+            <div class="empty-hint-sm">No videos loaded</div>
+          </div>
+          <input type="file" id="editorFileInput2" accept="video/*" multiple hidden>
+        </div>
+
+        <div class="sidebar-block">
+          <div class="sidebar-block-title">📋 Pipeline</div>
+          <div id="processingStack" class="proc-stack-inner">
+            <div class="empty-hint-sm">No operations yet</div>
           </div>
         </div>
-      </div>
 
-      <div class="editor-controls">
-        <label>Thumbnail interval:</label>
-        <select id="editorInterval">
-          <option value="5">Every 5s</option>
-          <option value="10" selected>Every 10s</option>
-          <option value="30">Every 30s</option>
-          <option value="60">Every 1min</option>
-        </select>
-        <button class="btn btn-sm" id="btnGenThumbs">Generate Thumbnails</button>
-        <span class="editor-hint hidden" id="editorThumbStatus"></span>
-        <button class="btn btn-sm btn-accent" id="btnAnalyze" style="margin-left:auto">🧠 Find Best Clips</button>
-      </div>
+        <div class="sidebar-block">
+          <div class="sidebar-block-title">
+            ✂️ Clips
+            <span class="badge-count" id="editorClipCount">0</span>
+          </div>
+          <div class="clip-list compact" id="editorClipList">
+            <div class="empty-hint-sm">No clips cut yet</div>
+          </div>
+          <button class="btn btn-sm btn-full hidden" id="btnEditorOpenOut">📂 Open Output</button>
+        </div>
 
-      <!-- Command Panel -->
-      <div class="cmd-panel hidden" id="cmdPanel">
-        <div class="cmd-header">
-          <span>💬 Comandos</span>
-          <span class="cmd-hint">Ej: "quita los silencios", "mejora la voz", "recorta de 10 a 30", "busca los mejores momentos"</span>
+        <div class="sidebar-block hidden" id="analyzePanel">
+          <div class="sidebar-block-title">🧠 Smart Picks
+            <span class="badge-sm" id="analyzeStatus"></span>
+          </div>
+          <div class="analyze-clips" id="analyzeClips"></div>
         </div>
-        <div class="cmd-input-row">
-          <input type="text" id="cmdInput" placeholder="Escribí un comando en español..." autocomplete="off">
-          <button class="btn btn-accent" id="btnCmdRun">Ejecutar</button>
+
+      </aside>
+
+      <!-- ── CENTER: Preview + Toolbar ── -->
+      <div class="editor-center">
+
+        <div class="editor-video-wrap" id="evsVideoWrap">
+          <video id="editorVideo" playsinline preload="metadata"></video>
+          <div class="sub-overlay">
+            <div class="sub-drag-handle" id="evsDragHandle">
+              <span id="evsPreviewText"></span>
+            </div>
+          </div>
         </div>
-        <div class="cmd-examples">
-          <button class="cmd-chip" data-cmd="quita los espacios en silencio">🔇 Quitar silencios</button>
-          <button class="cmd-chip" data-cmd="recorta de 30 a 90">✂️ Recortar 30→90</button>
-          <button class="cmd-chip" data-cmd="genera subtítulos">💬 Transcribir</button>
-          <button class="cmd-chip" data-cmd="busca los mejores momentos">🧠 Smart Picks</button>
-          <button class="cmd-chip" data-cmd="cambia velocidad a 2x">⏩ Velocidad 2x</button>
-          <button class="cmd-chip" data-cmd="invierte el video">🔄 Invertir</button>
-          <button class="cmd-chip" data-cmd="mejora la voz">🎙️ Mejorar voz</button>
+
+        <div class="editor-playbar">
+          <button class="play-btn" id="evsPlayBtn">▶</button>
+          <input type="range" class="editor-seekbar" id="evsSeekBar" min="0" max="1000" value="0" step="1">
+          <span class="time-label" id="evsTimeLabel">0:00 / 0:00</span>
         </div>
+
+        <div class="editor-toolbar">
+          <div class="toolbar-group">
+            <button class="tool-btn" id="btnAnalyze" title="AI finds best moments">
+              <span class="tool-icon">🧠</span>
+              <span class="tool-label">Smart Picks</span>
+            </button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-group">
+            <button class="tool-btn tool-cmd" data-cmd="mejora la voz" title="Enhance voice clarity">
+              <span class="tool-icon">🎚️</span>
+              <span class="tool-label">Enhance Voice</span>
+            </button>
+            <button class="tool-btn tool-cmd" data-cmd="quita los espacios en silencio" title="Remove silence">
+              <span class="tool-icon">🔇</span>
+              <span class="tool-label">Remove Silence</span>
+            </button>
+            <button class="tool-btn tool-cmd" data-cmd="cambia velocidad a 2x" title="2x speed">
+              <span class="tool-icon">⏩</span>
+              <span class="tool-label">2× Speed</span>
+            </button>
+            <button class="tool-btn tool-cmd" data-cmd="invierte el video" title="Reverse video">
+              <span class="tool-icon">🔄</span>
+              <span class="tool-label">Reverse</span>
+            </button>
+          </div>
+          <div class="toolbar-sep"></div>
+          <div class="toolbar-cmd-group">
+            <input type="text" id="cmdInput" class="cmd-inline" placeholder="Custom command in Spanish...">
+            <button class="btn btn-accent btn-sm" id="btnCmdRun">Run</button>
+          </div>
+        </div>
+
         <div class="cmd-result hidden" id="cmdResult"></div>
+
       </div>
 
-      <div class="analyze-panel hidden" id="analyzePanel">
-        <div class="analyze-header">
-          <h3>🧠 Smart Picks</h3>
-          <span class="analyze-status" id="analyzeStatus"></span>
+      <!-- ── RIGHT: Subtitles Panel ── -->
+      <div class="subs-panel" id="editorSubsPanel">
+
+        <div class="subs-panel-header">
+          <span>💬 Subtitles</span>
+          <span class="badge-count" id="evsSegCount">0</span>
         </div>
-        <div class="analyze-clips" id="analyzeClips"></div>
-      </div>
 
-      <div class="editor-timeline" id="editorTimeline">
-        <div class="placeholder-msg">
-          <div class="placeholder-icon">🖼️</div>
-          <p>Load a video and click <strong>Generate Thumbnails</strong></p>
+        <div class="subs-transcribe">
+          <div class="subs-row">
+            <select id="evsModel" class="select-sm">
+              <option value="tiny">Tiny (fast)</option>
+              <option value="base">Base</option>
+              <option value="small">Small</option>
+              <option value="medium" selected>Medium</option>
+              <option value="large">Large (best)</option>
+            </select>
+            <select id="evsLanguage" class="select-sm">
+              <option value="es" selected>Spanish</option>
+              <option value="en">English</option>
+              <option value="pt">Portuguese</option>
+              <option value="fr">French</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
+          <label class="karaoke-toggle">
+            <input type="checkbox" id="evsKaraokeToggle">
+            <span class="ktoggle-track"></span>
+            <span>Word-by-word karaoke</span>
+          </label>
+          <button class="btn btn-accent btn-full" id="btnEditorTranscribe">🎙️ Transcribe</button>
+          <div class="subs-status hidden" id="evsStatus"></div>
+        </div>
+
+        <div class="subs-presets-section">
+          <div class="subs-section-lbl">Style preset</div>
+          <div class="subs-presets" id="evsPresets"></div>
+        </div>
+
+        <div class="subs-style-section" id="evsStyleSection">
+          <div class="style-ctrl-row">
+            <label>Size</label>
+            <input type="range" id="evsFontSize" min="12" max="52" value="24" step="2">
+            <span class="style-val" id="evsFontSizeLabel">24</span>
+          </div>
+          <div class="style-ctrl-row">
+            <label>Color</label>
+            <input type="color" id="evsFontColor" value="#ffffff">
+          </div>
+          <div class="style-ctrl-row hidden" id="evsHighlightRow">
+            <label>Highlight</label>
+            <input type="color" id="evsHighlightColor" value="#ffdd00">
+          </div>
+          <div class="style-ctrl-row">
+            <label>Width</label>
+            <input type="range" id="evsMaxWidth" min="50" max="95" value="86" step="1">
+            <span class="style-val" id="evsMaxWidthLabel">86%</span>
+          </div>
+          <div class="style-ctrl-row">
+            <label>Position</label>
+            <div class="pos-group">
+              <button class="btn btn-sm pos-btn" data-y="0.1">Top</button>
+              <button class="btn btn-sm pos-btn" data-y="0.5">Mid</button>
+              <button class="btn btn-sm pos-btn pos-btn-active" data-y="0.85">Bot</button>
+            </div>
+          </div>
+          <div class="style-ctrl-row">
+            <label>Anim</label>
+            <div class="pos-group">
+              <button class="btn btn-sm anim-btn anim-btn-active" data-anim="none">None</button>
+              <button class="btn btn-sm anim-btn" data-anim="fade">Fade</button>
+              <button class="btn btn-sm anim-btn" data-anim="slide">Slide</button>
+              <button class="btn btn-sm anim-btn" data-anim="pop">Pop</button>
+            </div>
+          </div>
+          <p class="style-hint-text">↕ Drag subtitle on the video to reposition</p>
+        </div>
+
+        <div class="subs-segments-section">
+          <div class="subs-section-lbl">
+            Transcript
+            <span class="subs-hint-sm">· click time to seek · edit inline</span>
+          </div>
+          <div class="subs-segments" id="evsTranscript">
+            <div class="empty-hint-sm">Transcribe to see segments</div>
+          </div>
+        </div>
+
+        <div class="subs-burn-section">
+          <button class="btn btn-primary btn-full" id="btnEditorBurnSubs" disabled>📼 Burn Subtitles</button>
+          <div class="subs-burn-status hidden" id="evsExportStatus"></div>
+        </div>
+
+      </div>
+    </div><!-- /editor-body -->
+
+    <!-- ── MULTI-VIDEO TIMELINE ── -->
+    <div class="editor-tl-section">
+
+      <div class="tl-controls-bar">
+        <div class="tl-controls-left">
+          <span class="tl-label">Timeline</span>
+          <select id="editorInterval" class="select-sm">
+            <option value="5">5s</option>
+            <option value="10" selected>10s</option>
+            <option value="30">30s</option>
+            <option value="60">1min</option>
+          </select>
+          <button class="btn btn-sm" id="btnGenThumbs">🖼️ Thumbnails</button>
+          <span class="hint-text hidden" id="editorThumbStatus"></span>
+        </div>
+        <div class="tl-selection hidden" id="editorSelection">
+          <span class="sel-badge" id="editorSelRange">—</span>
+          <input type="text" id="editorClipLabel" placeholder="Clip name" class="clip-name-input">
+          <button class="btn btn-sm btn-accent" id="btnEditorCut">✂️ Cut</button>
+          <button class="btn btn-sm btn-ghost" id="btnEditorClear">✕</button>
         </div>
       </div>
 
-      <div class="editor-selection hidden" id="editorSelection">
-        <span>Selection: </span>
-        <span class="sel-range" id="editorSelRange">—</span>
-        <input type="text" id="editorClipLabel" placeholder="Clip name" class="clip-name-input">
-        <button class="btn btn-sm btn-accent" id="btnEditorCut">✂️ Cut Clip</button>
-        <button class="btn btn-sm btn-ghost" id="btnEditorClear">Clear</button>
+      <div class="tl-ruler" id="timelineRuler"></div>
+
+      <!-- Multi-lane video tracks with subtitle blocks -->
+      <div class="tl-multitrack" id="timelineMultiTrack">
+        <div class="tl-mt-placeholder">Add videos to see them on the timeline</div>
       </div>
 
-      <!-- Timeline Bar -->
-      <div class="editor-timeline-bar hidden" id="editorTimelineBar">
-        <div class="timeline-header">
-          <span class="timeline-title">⏱ Timeline</span>
-          <span class="timeline-hint">Drag edges to adjust timing · Drag body to shift</span>
-        </div>
-        <div class="timeline-ruler" id="timelineRuler"></div>
-        <div class="timeline-track" id="timelineTrack">
+      <!-- Clips track -->
+      <div class="tl-clips hidden" id="editorTimelineBar">
+        <div class="tl-track-label">✂️ Clips</div>
+        <div class="tl-track" id="timelineTrack">
           <div class="timeline-placeholder">No clips yet — select a range and cut</div>
         </div>
       </div>
 
-      <div class="editor-clips" id="editorClips">
-        <h3>Cut Clips <span class="badge-count" id="editorClipCount">0</span></h3>
-        <div class="clip-list" id="editorClipList">
-          <div class="empty-hint">Select thumbnails to define a range, then click <strong>Cut Clip</strong></div>
-        </div>
-        <button class="btn btn-sm hidden" id="btnEditorOpenOut">📂 Open Output</button>
-      </div>
     </div>
-  </div>
+
+  </div><!-- /editor-workspace -->
+
 </section>
 
 <!-- Toast -->

@@ -933,7 +933,7 @@ def _cmd_trim(video_path: str, side: str, seconds: float, timestamp: str, job_id
 def _cmd_cut_range(video_path: str, start: float, end: float, timestamp: str, job_id: str) -> dict:
     """Cut a time range from the video."""
     with jobs_lock:
-        jobs[job_id]["current"] = f"Extrayendo clip {fmtTime(start)} → {fmtTime(end)}..."
+        jobs[job_id]["current"] = f"Extrayendo clip {fmt_time(start)} → {fmt_time(end)}..."
 
     outfile = OUTPUT_DIR / f"{timestamp}_clip_{int(start)}-{int(end)}.mp4"
     duration = end - start
@@ -953,7 +953,7 @@ def _cmd_cut_range(video_path: str, start: float, end: float, timestamp: str, jo
             "output": str(outfile),
             "filename": outfile.name,
             "size_mb": round(outfile.stat().st_size / (1024 * 1024), 1),
-            "message": f"Clip extraído: {fmtTime(start)} → {fmtTime(end)}",
+            "message": f"Clip extraído: {fmt_time(start)} → {fmt_time(end)}",
         }
     raise RuntimeError(stderr.strip() or "Failed to cut")
 
@@ -1167,6 +1167,134 @@ def _get_duration(path: str) -> float:
     if rc == 0 and stdout.strip():
         return float(stdout.strip())
     return 0
+
+
+# ═══════════════════════════════════════════════════════════
+#  Export: Concatenate multiple videos
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/api/export/concat", methods=["POST"])
+def export_concat():
+    """Concatenate multiple videos in order. Each video can have trim + subtitles."""
+    data = request.get_json()
+    videos = data.get("videos", [])  # [{path, trimStart?, trimEnd?, subtitles?: {segments, style}}]
+
+    if not videos or len(videos) < 1:
+        return jsonify({"error": "At least one video required"}), 400
+
+    job_id = str(int(time.time() * 1000))
+    with jobs_lock:
+        jobs[job_id] = {"status": "running", "current": "Preparing...", "result": None}
+
+    def do_concat():
+        try:
+            import tempfile
+            tmpdir = Path(tempfile.mkdtemp(prefix="clipstudio_concat_"))
+            processed = []
+
+            for i, vid in enumerate(videos):
+                vpath = vid.get("path", "")
+                if not vpath or not Path(vpath).exists():
+                    raise FileNotFoundError(f"Video {i+1} not found: {vpath}")
+
+                with jobs_lock:
+                    jobs[job_id]["current"] = f"Processing video {i+1}/{len(videos)}..."
+
+                current = str(vpath)
+
+                # Apply trim if set
+                trim_start = vid.get("trimStart") or 0
+                trim_end = vid.get("trimEnd")
+                if trim_end is not None:
+                    dur = _get_duration(current)
+                    if trim_end < dur - 0.1 or trim_start > 0:
+                        trimmed = tmpdir / f"trimmed_{i:02d}.mp4"
+                        rc, _, stderr = run([
+                            "ffmpeg", "-y",
+                            "-ss", str(trim_start),
+                            "-i", current,
+                            "-to", str(trim_end),
+                            "-c", "copy",
+                            str(trimmed)
+                        ], timeout=300)
+                        if rc == 0 and trimmed.exists():
+                            current = str(trimmed)
+
+                # Burn subtitles if present
+                subs = vid.get("subtitles")
+                if subs and subs.get("segments") and len(subs["segments"]) > 0:
+                    from subtitle import process_video
+                    sub_output = tmpdir / f"subbed_{i:02d}.mp4"
+                    style = subs.get("style", {})
+                    # Convert hex colors to ASS format if needed
+                    for key in ["primary_color", "outline_color", "highlight_color"]:
+                        if key in style and style[key].startswith("#"):
+                            style[key] = _hex_to_ass(style[key])
+                    result = process_video(
+                        current, str(sub_output),
+                        segments_override=subs["segments"],
+                        style=style,
+                    )
+                    current = result["output"]
+
+                processed.append(current)
+
+            # Concatenate with ffmpeg concat demuxer
+            with jobs_lock:
+                jobs[job_id]["current"] = "Concatenating videos..."
+
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            outfile = OUTPUT_DIR / f"{timestamp}_export_final.mp4"
+
+            concat_list = tmpdir / "concat.txt"
+            with open(concat_list, "w") as f:
+                for p in processed:
+                    f.write(f"file '{p}'\n")
+
+            rc, stdout, stderr = run([
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                str(outfile)
+            ], timeout=600)
+
+            if rc != 0:
+                raise RuntimeError(f"Concatenation failed: {stderr[-300:]}")
+
+            size_mb = outfile.stat().st_size / (1024 * 1024)
+
+            # Cleanup temp
+            try:
+                shutil.rmtree(tmpdir)
+            except Exception:
+                pass
+
+            with jobs_lock:
+                jobs[job_id] = {
+                    "status": "done",
+                    "result": {
+                        "ok": True,
+                        "output": str(outfile),
+                        "filename": outfile.name,
+                        "size_mb": round(size_mb, 1),
+                        "video_count": len(videos),
+                        "message": f"{len(videos)} videos concatenados",
+                    }
+                }
+        except Exception as e:
+            with jobs_lock:
+                jobs[job_id] = {"status": "error", "error": str(e)}
+
+    threading.Thread(target=do_concat, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+def _hex_to_ass(hex_color: str) -> str:
+    """Convert #rrggbb to &H00BBGGRR"""
+    h = hex_color.lstrip("#")
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H00{b}{g}{r}".upper()
 
 
 # ═══════════════════════════════════════════════════════════

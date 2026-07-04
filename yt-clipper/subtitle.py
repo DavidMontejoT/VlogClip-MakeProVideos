@@ -28,9 +28,10 @@ if os.path.exists(_ffmpeg_full):
     FFMPEG_BIN = _ffmpeg_full
 
 
-def _margin_lr(video_width: int) -> int:
-    """Calculate left/right margins for 86% usable text width."""
-    return int(video_width * 0.07)  # (1 - 0.86) / 2
+def _margin_lr(video_width: int, max_width_pct: float = 86) -> int:
+    """Calculate left/right margins for given usable text width percentage."""
+    margin_pct = (100 - max_width_pct) / 200  # e.g. 86% → 7% margin each side
+    return int(video_width * margin_pct)
 
 
 def fmt_ass(seconds: float) -> str:
@@ -158,7 +159,9 @@ def generate_ass_karaoke(segments: list[dict], output_path: str, style: dict = N
     animation = style.get("animation", "none")
     pos_x_pct = style.get("position_x_pct")
     pos_y_pct = style.get("position_y_pct")
+    max_width_pct = style.get("max_width_pct", 86)
     pos_tag = _make_event_tag(animation, pos_x_pct, pos_y_pct, video_width, video_height)
+    lr_margin = _margin_lr(video_width, max_width_pct)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -169,7 +172,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{_margin_lr(video_width)},{_margin_lr(video_width)},{margin_v},1
+Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{lr_margin},{lr_margin},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -251,7 +254,9 @@ def generate_ass(segments: list[dict], output_path: str, style: dict = None,
     animation = style.get("animation", "none")
     pos_x_pct = style.get("position_x_pct")
     pos_y_pct = style.get("position_y_pct")
+    max_width_pct = style.get("max_width_pct", 86)
     event_tag = _make_event_tag(animation, pos_x_pct, pos_y_pct, video_width, video_height)
+    lr_margin = _margin_lr(video_width, max_width_pct)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -262,7 +267,7 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{_margin_lr(video_width)},{_margin_lr(video_width)},{margin_v},1
+Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{lr_margin},{lr_margin},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

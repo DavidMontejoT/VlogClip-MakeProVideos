@@ -457,540 +457,720 @@ const SUB_PRESETS = [
   },
 ];
 
-let subVideoPath = "";
-let subUploadedFilename = "";
-let subSegments = [];
-let subKaraokeMode = false;
-let subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00", animation: "none" };
-let subDragging = false;
-let subDragOffset = { x: 0, y: 0 };
-let subActiveSegIndex = -1;
-
-// ── Phase 1: Upload ───────────────────────────────────────
-
-setupDropZone("subDropZone", "subFileInput", (result) => {
-  subVideoPath = result.path;
-  subUploadedFilename = result.filename;
-  $("#subVideoPath").value = result.filename;
-  $("#subPathRow").classList.remove("hidden");
-});
-
-$("#btnClearSub").addEventListener("click", () => {
-  subVideoPath = "";
-  subUploadedFilename = "";
-  $("#subVideoPath").value = "";
-  $("#subPathRow").classList.add("hidden");
-  resetDropZone("subDropZone");
-  $("#subStatus").classList.add("hidden");
-  $("#subPreviewPanel").classList.add("hidden");
-});
-
-// ── Transcribe ────────────────────────────────────────────
-
-$("#btnTranscribe").addEventListener("click", async () => {
-  if (!subVideoPath) { toast("Upload a video first", "error"); return; }
-
-  const model = $("#subModel").value;
-  const language = $("#subLanguage").value;
-  const btn = $("#btnTranscribe");
-
-  btn.disabled = true;
-  btn.textContent = "Transcribing...";
-  $("#subStatus").classList.remove("hidden");
-  $("#subStatus").innerHTML = '<span style="color:var(--accent)">Running Whisper... this may take a few minutes.</span>';
-  $("#subPreviewPanel").classList.add("hidden");
-
-  try {
-    subKaraokeMode = $("#subKaraokeToggle").checked;
-    const result = await api("/api/subtitle/transcribe", {
-      path: subVideoPath, model, language,
-      word_timestamps: subKaraokeMode,
-    });
-    if (result.error) {
-      $("#subStatus").innerHTML = `<span style="color:var(--red)">${result.error}</span>`;
-      btn.disabled = false; btn.textContent = "Transcribe";
-      return;
-    }
-
-    const jobId = result.job_id;
-    const poll = setInterval(async () => {
-      const job = await api("/api/job/" + jobId);
-      if (job.status === "done" && job.result) {
-        clearInterval(poll);
-        subSegments = job.result.segments;
-        showTranscriptPreview(subSegments);
-        btn.disabled = false; btn.textContent = "Transcribe";
-        $("#subStatus").classList.add("hidden");
-        setTimeout(showSubEditor, 300);
-      } else if (job.status === "error") {
-        clearInterval(poll);
-        $("#subStatus").innerHTML = `<span style="color:var(--red)">${job.error}</span>`;
-        btn.disabled = false; btn.textContent = "Transcribe";
-      } else {
-        $("#subStatus").innerHTML = `<span style="color:var(--accent)">${job.current || "Transcribing..."}</span>`;
-      }
-    }, 2000);
-  } catch (e) {
-    toast("Error: " + e.message, "error");
-    btn.disabled = false; btn.textContent = "Transcribe";
-  }
-});
-
-function showTranscriptPreview(segments) {
-  $("#subPreviewPanel").classList.remove("hidden");
-  $("#subTranscript").innerHTML = segments.map(seg => `
-    <div class="sub-line">
-      <span class="sub-ts">${fmtTime(seg.start)}</span>
-      <span class="sub-txt">${seg.text}</span>
-    </div>
-  `).join("");
-}
-
-// ── Phase 2: Visual Editor ────────────────────────────────
-
-function showSubEditor() {
-  $("#subPhase1").classList.add("hidden");
-  $("#subPhase2").classList.remove("hidden");
-
-  const vid = $("#subVideo");
-  vid.src = `/api/uploads/${subUploadedFilename}`;
-  vid.load();
-
-  subStyle = { position_x_pct: 0.5, position_y_pct: 0.85, font_size: 24, font_color: "#ffffff", outline_color: "#000000", outline_width: 2.5, border_style: 1, back_color: null, back_alpha: 0, highlight_color: "#ffdd00", animation: "none" };
-  $$(".sub-anim-btn").forEach(b => b.classList.toggle("sub-anim-active", b.dataset.anim === "none"));
-  $("#subHighlightRow").classList.toggle("hidden", !subKaraokeMode);
-  renderSubPresets();
-  updateSubOverlayPosition();
-  updateSubOverlayStyle();
-  renderSubSegments();
-  $("#subSegCount").textContent = subSegments.length;
-  $("#subExportStatus").classList.add("hidden");
-}
-
-function renderSubPresets() {
-  const container = $("#subPresets");
-  container.innerHTML = "";
-  SUB_PRESETS.forEach((preset, i) => {
-    const card = document.createElement("div");
-    card.className = "sub-preset-card" + (i === 0 ? " sub-preset-active" : "");
-    card.dataset.id = preset.id;
-    const p = preset.preview;
-    card.innerHTML = `
-      <div class="sub-preset-preview" style="background:${p.bg};${p.boxBg ? "padding:2px 5px;border-radius:2px;" : ""}">
-        <span style="color:${p.color};text-shadow:${p.shadow || "none"};font-weight:${p.bold ? 900 : 700};font-size:13px">Abc</span>
-      </div>
-      <span class="sub-preset-name">${preset.name}</span>
-    `;
-    card.addEventListener("click", () => applySubPreset(preset));
-    container.appendChild(card);
-  });
-}
-
-function applySubPreset(preset) {
-  subStyle.font_size = preset.font_size;
-  subStyle.font_color = preset.font_color;
-  subStyle.outline_color = preset.outline_color;
-  subStyle.outline_width = preset.outline_width;
-  subStyle.border_style = preset.border_style;
-  subStyle.back_color = preset.back_color;
-  subStyle.back_alpha = preset.back_alpha || 0;
-
-  $("#subFontSizeSlider").value = preset.font_size;
-  $("#subFontSizeLabel").textContent = preset.font_size;
-  $("#subColorPicker").value = preset.font_color;
-
-  document.querySelectorAll(".sub-preset-card").forEach(c => c.classList.remove("sub-preset-active"));
-  document.querySelector(`.sub-preset-card[data-id="${preset.id}"]`)?.classList.add("sub-preset-active");
-
-  updateSubOverlayStyle();
-}
-
-$("#btnBackSub").addEventListener("click", () => {
-  $("#subPhase2").classList.add("hidden");
-  $("#subPhase1").classList.remove("hidden");
-  const vid = $("#subVideo");
-  vid.pause();
-  vid.src = "";
-});
-
-// ── Video Playback ────────────────────────────────────────
-
-const subVideo = $("#subVideo");
-
-subVideo.addEventListener("loadedmetadata", () => {
-  $("#subSeekBar").max = Math.floor(subVideo.duration * 10);
-  updateSubTime();
-});
-
-subVideo.addEventListener("timeupdate", () => {
-  if (!subVideo.paused) $("#subSeekBar").value = Math.floor(subVideo.currentTime * 10);
-  updateSubTime();
-  syncSubtitleOverlay();
-});
-
-subVideo.addEventListener("play",  () => { $("#subPlayBtn").innerHTML = "&#9646;&#9646;"; });
-subVideo.addEventListener("pause", () => { $("#subPlayBtn").innerHTML = "&#9654;"; });
-
-$("#subPlayBtn").addEventListener("click", () => {
-  if (subVideo.paused) subVideo.play(); else subVideo.pause();
-});
-
-$("#subSeekBar").addEventListener("input", () => {
-  subVideo.currentTime = $("#subSeekBar").value / 10;
-});
-
-function updateSubTime() {
-  const cur = fmtTime(Math.floor(subVideo.currentTime || 0));
-  const dur = isNaN(subVideo.duration) ? "0:00" : fmtTime(Math.floor(subVideo.duration));
-  $("#subTimeLabel").textContent = `${cur} / ${dur}`;
-}
-
-function syncSubtitleOverlay() {
-  const t = subVideo.currentTime;
-  let activeIdx = -1;
-  for (let i = 0; i < subSegments.length; i++) {
-    if (t >= subSegments[i].start && t <= subSegments[i].end) { activeIdx = i; break; }
-  }
-
-  const previewEl = $("#subPreviewText");
-  const seg = activeIdx >= 0 ? subSegments[activeIdx] : null;
-
-  if (!seg) {
-    previewEl.innerHTML = "";
-  } else if (subKaraokeMode && seg.words && seg.words.length > 0) {
-    // Word-by-word karaoke preview
-    const activeWord = seg.words.find(w => t >= w.start && t <= w.end);
-    const hlColor = subStyle.highlight_color || "#ffdd00";
-    const html = seg.words.map(w => {
-      const isActive = activeWord && w.start === activeWord.start;
-      return isActive
-        ? `<span style="color:${hlColor}">${w.word}</span>`
-        : `<span style="opacity:0.5">${w.word}</span>`;
-    }).join(" ");
-    previewEl.innerHTML = html;
-  } else {
-    previewEl.textContent = seg.text;
-  }
-
-  if (activeIdx !== subActiveSegIndex) {
-    subActiveSegIndex = activeIdx;
-    document.querySelectorAll(".sub-seg-item").forEach((el, i) => {
-      el.classList.toggle("sub-seg-active", i === activeIdx);
-    });
-    if (activeIdx >= 0) {
-      const el = $(`.sub-seg-item[data-idx="${activeIdx}"]`);
-      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      triggerSubtitleAnimation();
-    }
-  }
-}
-
-// ── Subtitle Overlay ──────────────────────────────────────
-
-function updateSubOverlayPosition() {
-  const handle = $("#subDragHandle");
-  handle.style.left = (subStyle.position_x_pct * 100) + "%";
-  handle.style.top  = (subStyle.position_y_pct * 100) + "%";
-}
-
-function updateSubOverlayStyle() {
-  const text = $("#subPreviewText");
-  const handle = $("#subDragHandle");
-  const vid = $("#subVideo");
-  const assSize = subStyle.font_size || 24;
-  // WYSIWYG: scale ASS pt to screen px based on actual display ratio
-  const scale = vid.clientHeight && vid.videoHeight ? vid.clientHeight / vid.videoHeight : 1;
-  const size = assSize * scale;
-  const color = subStyle.font_color || "#ffffff";
-  const oc = subStyle.outline_color || "#000000";
-  const ow = subStyle.outline_width ?? 2.5;
-
-  text.style.fontSize = size + "px";
-  text.style.color = color;
-  handle.style.maxWidth = "86%";
-
-  if (ow > 0) {
-    const s = Math.round(ow);
-    text.style.textShadow = `${s}px ${s}px 0 ${oc},${-s}px ${-s}px 0 ${oc},${s}px ${-s}px 0 ${oc},${-s}px ${s}px 0 ${oc}`;
-  } else {
-    text.style.textShadow = "none";
-  }
-
-  if (subStyle.back_color && subStyle.border_style === 3) {
-    const h = subStyle.back_color.replace("#", "");
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    const a = 1 - (subStyle.back_alpha || 0);
-    handle.style.background = `rgba(${r},${g},${b},${a})`;
-    handle.style.padding = "4px 12px";
-    handle.style.borderRadius = "3px";
-  } else {
-    handle.style.background = "transparent";
-    handle.style.padding = "4px 8px";
-  }
-}
-
-// ── Drag ─────────────────────────────────────────────────
-
-const dragHandle = $("#subDragHandle");
-
-dragHandle.addEventListener("mousedown", (e) => {
-  e.preventDefault();
-  subDragging = true;
-  const rect = dragHandle.getBoundingClientRect();
-  subDragOffset.x = e.clientX - rect.left - rect.width / 2;
-  subDragOffset.y = e.clientY - rect.top  - rect.height / 2;
-  dragHandle.style.cursor = "grabbing";
-});
-
-document.addEventListener("mousemove", (e) => {
-  if (!subDragging) return;
-  const wrap = $("#subVideoWrap");
-  const r = wrap.getBoundingClientRect();
-  subStyle.position_x_pct = Math.max(0.05, Math.min(0.95, (e.clientX - subDragOffset.x - r.left) / r.width));
-  subStyle.position_y_pct = Math.max(0.05, Math.min(0.95, (e.clientY - subDragOffset.y - r.top)  / r.height));
-  updateSubOverlayPosition();
-});
-
-document.addEventListener("mouseup", () => {
-  if (subDragging) { subDragging = false; dragHandle.style.cursor = "grab"; }
-});
-
-dragHandle.addEventListener("touchstart", (e) => {
-  subDragging = true;
-  const t = e.touches[0];
-  const rect = dragHandle.getBoundingClientRect();
-  subDragOffset.x = t.clientX - rect.left - rect.width / 2;
-  subDragOffset.y = t.clientY - rect.top  - rect.height / 2;
-  e.preventDefault();
-}, { passive: false });
-
-document.addEventListener("touchmove", (e) => {
-  if (!subDragging) return;
-  const t = e.touches[0];
-  const wrap = $("#subVideoWrap");
-  const r = wrap.getBoundingClientRect();
-  subStyle.position_x_pct = Math.max(0.05, Math.min(0.95, (t.clientX - subDragOffset.x - r.left) / r.width));
-  subStyle.position_y_pct = Math.max(0.05, Math.min(0.95, (t.clientY - subDragOffset.y - r.top)  / r.height));
-  updateSubOverlayPosition();
-  e.preventDefault();
-}, { passive: false });
-
-document.addEventListener("touchend", () => { subDragging = false; });
-
-// ── Style Controls ────────────────────────────────────────
-
-$("#subFontSizeSlider").addEventListener("input", (e) => {
-  subStyle.font_size = parseInt(e.target.value);
-  $("#subFontSizeLabel").textContent = e.target.value;
-  updateSubOverlayStyle();
-});
-
-$("#subColorPicker").addEventListener("input", (e) => {
-  subStyle.font_color = e.target.value;
-  updateSubOverlayStyle();
-});
-
-$("#subHighlightPicker").addEventListener("input", (e) => {
-  subStyle.highlight_color = e.target.value;
-});
-
-document.querySelectorAll(".sub-pos-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".sub-pos-btn").forEach(b => b.classList.remove("sub-pos-active"));
-    btn.classList.add("sub-pos-active");
-    subStyle.position_y_pct = parseFloat(btn.dataset.y);
-    updateSubOverlayPosition();
-  });
-});
-
-document.querySelectorAll(".sub-anim-btn").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".sub-anim-btn").forEach(b => b.classList.remove("sub-anim-active"));
-    btn.classList.add("sub-anim-active");
-    subStyle.animation = btn.dataset.anim;
-    triggerSubtitleAnimation();
-  });
-});
-
-function triggerSubtitleAnimation() {
-  const handle = $("#subDragHandle");
-  handle.classList.remove("sub-anim-fade", "sub-anim-slide", "sub-anim-pop");
-  void handle.offsetWidth; // force reflow to restart animation
-  if (subStyle.animation && subStyle.animation !== "none") {
-    handle.classList.add(`sub-anim-${subStyle.animation}`);
-  }
-}
-
-// ── Transcript Segment Editor ─────────────────────────────
-
-function renderSubSegments() {
-  const list = $("#subSegmentsList");
-  list.innerHTML = "";
-  subSegments.forEach((seg, i) => {
-    const div = document.createElement("div");
-    div.className = "sub-seg-item";
-    div.dataset.idx = i;
-    div.innerHTML = `
-      <span class="sub-seg-ts">${fmtTime(seg.start)}</span>
-      <span class="sub-seg-text" contenteditable="true" spellcheck="false">${seg.text}</span>
-    `;
-    div.querySelector(".sub-seg-ts").addEventListener("click", () => {
-      subVideo.currentTime = seg.start;
-      subVideo.pause();
-      syncSubtitleOverlay();
-    });
-    const textEl = div.querySelector(".sub-seg-text");
-    textEl.addEventListener("input", () => {
-      subSegments[i].text = textEl.textContent.trim();
-      subSegments[i].words = [];  // word timing becomes stale after manual edit
-      if (subActiveSegIndex === i) syncSubtitleOverlay();
-    });
-    textEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); textEl.blur(); }
-    });
-    list.appendChild(div);
-  });
-}
-
-// ── Export ────────────────────────────────────────────────
-
-function hexToAss(hex) {
-  const h = hex.replace("#", "");
-  return `&H00${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}`.toUpperCase();
-}
-
-$("#btnExportSubs").addEventListener("click", async () => {
-  if (!subVideoPath || subSegments.length === 0) { toast("Nothing to export", "error"); return; }
-
-  const statusEl = $("#subExportStatus");
-  const btn = $("#btnExportSubs");
-
-  btn.disabled = true; btn.textContent = "Exporting...";
-  statusEl.classList.remove("hidden");
-  statusEl.innerHTML = '<span style="color:var(--accent)">Burning subtitles into video...</span>';
-
-  const exportStyle = {
-    font_size: subStyle.font_size,
-    position_x_pct: subStyle.position_x_pct,
-    position_y_pct: subStyle.position_y_pct,
-    primary_color:   hexToAss(subStyle.font_color      || "#ffffff"),
-    outline_color:   hexToAss(subStyle.outline_color   || "#000000"),
-    highlight_color: hexToAss(subStyle.highlight_color || "#ffdd00"),
-    dim_color: "&H80FFFFFF",
-    outline_width: subStyle.outline_width ?? 2.5,
-    border_style: subStyle.border_style || 1,
-    back_color: subStyle.back_color || null,
-    back_alpha: subStyle.back_alpha || 0,
-    animation: subStyle.animation || "none",
-  };
-
-  try {
-    const result = await api("/api/subtitle/burn", {
-      path: subVideoPath,
-      segments: subSegments,
-      style: exportStyle,
-    });
-
-    if (result.error) {
-      statusEl.innerHTML = `<span style="color:var(--red)">${result.error}</span>`;
-      btn.disabled = false; btn.textContent = "Export & Burn";
-      return;
-    }
-
-    const poll = setInterval(async () => {
-      const job = await api("/api/job/" + result.job_id);
-      if (job.status === "done" && job.result) {
-        clearInterval(poll);
-        statusEl.innerHTML = `
-          <span style="color:var(--green)">Done! ${job.result.count} subtitles burned.</span><br>
-          <span style="font-size:11px;color:var(--text-muted)">Output: ${job.result.output}</span>
-        `;
-        btn.disabled = false; btn.textContent = "Export & Burn";
-        toast("Exported successfully!", "success");
-      } else if (job.status === "error") {
-        clearInterval(poll);
-        statusEl.innerHTML = `<span style="color:var(--red)">${job.error}</span>`;
-        btn.disabled = false; btn.textContent = "Export & Burn";
-      } else {
-        statusEl.innerHTML = `<span style="color:var(--accent)">${job.current || "Burning..."}</span>`;
-      }
-    }, 2000);
-  } catch (e) {
-    statusEl.innerHTML = `<span style="color:var(--red)">${e.message}</span>`;
-    btn.disabled = false; btn.textContent = "Export & Burn";
-  }
-});
+// SUB_PRESETS above — used by the unified editor subtitle module below
 
 // ═══════════════════════════════════════════════════════════
-//  MODULE: Editor
+//  MODULE: Editor — Multi-video state
 // ═══════════════════════════════════════════════════════════
 
-let editorVideoPath = "";
-let editorVideoFilename = "";
+// Multi-video state
+let editorVideos = [];        // [{id, path, filename, info, order, subtitles: {segments, style, karaoke, transcribed}}]
+let activeVideoId = null;     // currently displayed video
+let editorVideoCounter = 0;
 
-// Setup drop zone
-setupDropZone("editorDropZone", "editorFileInput", (result) => {
-  editorVideoPath = result.path;
-  editorVideoFilename = result.filename;
-  currentWorkingFile = { path: result.path, filename: result.filename };
-  processingHistory = [];
-  renderProcessingHistory();
-  $("#editorVideoPath").value = result.filename;
-  $("#editorPathRow").classList.remove("hidden");
+function getActiveVideo() {
+  return editorVideos.find(v => v.id === activeVideoId) || null;
+}
+
+function getActiveVideoPath() {
+  const v = getActiveVideo();
+  return v ? v.path : "";
+}
+
+// Legacy aliases for backward compat — always point to active video
+Object.defineProperty(window, 'editorVideoPath', {
+  get() { return getActiveVideoPath(); },
+  set(v) {
+    const av = getActiveVideo();
+    if (av) av.path = v;
+  }
+});
+Object.defineProperty(window, 'editorVideoFilename', {
+  get() { const v = getActiveVideo(); return v ? v.filename : ""; },
+  set(v) {
+    const av = getActiveVideo();
+    if (av) av.filename = v;
+  }
+});
+// Proxy editorSubs.segments / .karaoke / .activeIdx to active video
+const _activeIdx = { val: -1 };
+Object.defineProperty(editorSubs, 'segments', {
+  get() { return getSubsData().segments; },
+  set(v) {
+    const av = getActiveVideo();
+    if (av) av.subtitles.segments = v;
+  }
+});
+Object.defineProperty(editorSubs, 'karaoke', {
+  get() { return getSubsData().karaoke; },
+  set(v) {
+    const av = getActiveVideo();
+    if (av) av.subtitles.karaoke = v;
+  }
+});
+Object.defineProperty(editorSubs, 'activeIdx', {
+  get() { return _activeIdx.val; },
+  set(v) { _activeIdx.val = v; }
 });
 
-$("#btnClearEditor").addEventListener("click", () => {
-  editorVideoPath = "";
-  editorVideoFilename = "";
-  currentWorkingFile = null;
-  processingHistory = [];
-  $("#editorVideoPath").value = "";
-  $("#editorPathRow").classList.add("hidden");
-  resetDropZone("editorDropZone");
-  $("#editorMain").classList.add("hidden");
-  $("#cmdPanel").classList.add("hidden");
-  $("#editorVideoSub").classList.add("hidden");
+// Global subtitle style (shared, but each video stores its own segments)
+let editorSubs = {
+  style: {
+    position_x_pct: 0.5, position_y_pct: 0.85,
+    font_size: 24, font_color: "#ffffff",
+    outline_color: "#000000", outline_width: 2.5,
+    border_style: 1, back_color: null, back_alpha: 0,
+    highlight_color: "#ffdd00", animation: "none",
+    max_width_pct: 86,
+  },
+  dragging: false,
+  dragOffset: { x: 0, y: 0 },
+};
+
+// Convenience getter/setter for active video's subtitle data
+function getSubsData() {
+  const v = getActiveVideo();
+  return v ? v.subtitles : { segments: [], karaoke: false, transcribed: false };
+}
+
+// Setup drop zone — accept multiple files
+setupDropZone("editorDropZone", "editorFileInput", async (result) => {
+  await addVideoToEditor(result.path, result.filename);
 });
 
-$("#btnLoadLocal").addEventListener("click", async () => {
-  const path = editorVideoPath;
-  if (!path) { toast("Enter a video path", "error"); return; }
+// "Add Video" button in infobar
+$("#btnAddMoreVideos").addEventListener("click", () => {
+  $("#editorFileInput2").click();
+});
+$("#editorFileInput2").addEventListener("change", async () => {
+  const files = $("#editorFileInput2").files;
+  if (files.length > 0) {
+    await addMultipleVideos(files);
+    $("#editorFileInput2").value = "";
+  }
+});
 
-  $("#btnLoadLocal").disabled = true;
-  $("#btnLoadLocal").textContent = "Loading...";
+// Also support dropping multiple files on the main zone
+const origDropZoneHandler = document.getElementById("editorDropZone").ondrop;
+document.getElementById("editorFileInput").addEventListener("change", async () => {
+  const files = document.getElementById("editorFileInput").files;
+  if (files.length > 0) {
+    // Process all files
+    for (const file of files) {
+      await uploadAndAdd(file);
+    }
+    document.getElementById("editorFileInput").value = "";
+  }
+});
+
+// Override drop handler to support multiple files
+const editorDZ = document.getElementById("editorDropZone");
+editorDZ.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  editorDZ.classList.remove("drag-over");
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length === 0) return;
+  for (const file of files) {
+    await uploadAndAdd(file);
+  }
+});
+
+async function uploadAndAdd(file) {
+  // Show progress
+  editorDZ.querySelector(".drop-icon").textContent = "⏳";
+  editorDZ.querySelector("p").textContent = `Uploading ${file.name}...`;
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const resp = await fetch("/api/upload", { method: "POST", body: formData });
+    const result = await resp.json();
+    if (result.ok) {
+      await addVideoToEditor(result.path, result.filename);
+      toast(`Uploaded: ${result.filename}`, "success");
+    } else {
+      toast(result.error || "Upload failed", "error");
+    }
+  } catch (e) {
+    toast("Upload error: " + e.message, "error");
+  }
+  // Reset drop zone text
+  resetEditorDropZoneText();
+}
+
+function resetEditorDropZoneText() {
+  if (editorVideos.length === 0) return;
+  editorDZ.querySelector(".drop-icon").textContent = "🎬";
+  editorDZ.querySelector("p").textContent = "Drag & drop more videos here, or click to browse";
+  editorDZ.querySelector(".drop-hint").textContent = `MP4, MOV, AVI, MKV — ${editorVideos.length}/10 loaded`;
+}
+
+async function addVideoToEditor(path, filename) {
+  if (editorVideos.length >= 10) {
+    toast("Maximum 10 videos reached", "error");
+    return;
+  }
 
   try {
     const info = await api("/api/local/info", { path });
     if (info.error) { toast(info.error, "error"); return; }
-    state.editorInfo = info;
-    state.editorInfo.path = editorVideoPath;
+    info.path = path;
 
-    $("#editorMain").classList.remove("hidden");
-    $("#cmdPanel").classList.remove("hidden");
-    $("#editorVideoSub").classList.remove("hidden");
+    editorVideoCounter++;
+    const video = {
+      id: `vid_${editorVideoCounter}_${Date.now()}`,
+      path, filename,
+      info,
+      order: editorVideos.length,
+      subtitles: {
+        segments: [],
+        karaoke: false,
+        transcribed: false,
+      },
+    };
 
-    // Setup video player
+    editorVideos.push(video);
+
+    // First video added — open workspace
+    if (editorVideos.length === 1) {
+      activeVideoId = video.id;
+      $("#editorDropState").classList.add("hidden");
+      $("#editorWorkspace").classList.remove("hidden");
+      loadActiveVideoIntoPlayer();
+    }
+
+    renderVideoList();
+    renderMultiTrackTimeline();
+    updateEditorInfoBar();
+    resetEditorDropZoneText();
+  } catch (e) {
+    toast("Error loading video: " + e.message, "error");
+  }
+}
+
+async function addMultipleVideos(files) {
+  for (const file of files) {
+    await uploadAndAdd(file);
+  }
+}
+
+function selectVideo(videoId) {
+  if (activeVideoId === videoId) return;
+  activeVideoId = videoId;
+  const v = getActiveVideo();
+  if (!v) return;
+
+  // Sync editorInfo for timeline/clips/thumbs
+  state.editorInfo = v.info;
+
+  loadActiveVideoIntoPlayer();
+  renderVideoList();
+  renderMultiTrackTimeline();
+  updateEditorInfoBar();
+
+  // Restore subtitle state for this video
+  const subs = v.subtitles;
+  if (subs.transcribed) {
+    renderEvsTranscript();
+    $("#btnEditorBurnSubs").disabled = false;
+    $("#evsSegCount").textContent = subs.segments.length;
+  } else {
+    $("#evsTranscript").innerHTML = '<div class="empty-hint-sm">Transcribe to see segments</div>';
+    $("#btnEditorBurnSubs").disabled = true;
+    $("#evsSegCount").textContent = "0";
+  }
+
+  // Update karaoke toggle
+  $("#evsKaraokeToggle").checked = subs.karaoke;
+  $("#evsHighlightRow").classList.toggle("hidden", !subs.karaoke);
+
+  // Reset clip selection and refresh thumbnails
+  state.editorSel.start = null;
+  state.editorSel.end = null;
+  editorUpdateSelectionUI(parseInt($("#editorInterval").value));
+  editorGenThumbs();
+}
+
+function loadActiveVideoIntoPlayer() {
+  const v = getActiveVideo();
+  if (!v) return;
+  const vid = $("#editorVideo");
+  vid.src = `/api/uploads/${v.filename}`;
+  vid.load();
+}
+
+function removeVideo(videoId) {
+  if (editorVideos.length <= 1) {
+    // Remove all
+    clearAllVideos();
+    return;
+  }
+
+  const idx = editorVideos.findIndex(v => v.id === videoId);
+  if (idx < 0) return;
+
+  editorVideos.splice(idx, 1);
+
+  // Re-index order
+  editorVideos.forEach((v, i) => { v.order = i; });
+
+  // If removed active, select first
+  if (activeVideoId === videoId) {
+    activeVideoId = editorVideos[0].id;
+    loadActiveVideoIntoPlayer();
+  }
+
+  renderVideoList();
+  renderMultiTrackTimeline();
+  updateEditorInfoBar();
+}
+
+function clearAllVideos() {
+  editorVideos = [];
+  activeVideoId = null;
+  editorVideoCounter = 0;
+  currentWorkingFile = null;
+  processingHistory = [];
+  state.editorClips = [];
+  state.editorInfo = null;
+
+  $("#editorWorkspace").classList.add("hidden");
+  $("#editorDropState").classList.remove("hidden");
+  resetDropZone("editorDropZone");
+  const vid = $("#editorVideo");
+  vid.pause(); vid.src = "";
+
+  // Reset subtitle panel
+  $("#evsTranscript").innerHTML = '<div class="empty-hint-sm">Transcribe to see segments</div>';
+  $("#btnEditorBurnSubs").disabled = true;
+  $("#evsSegCount").textContent = "0";
+  renderProcessingHistory();
+}
+
+$("#btnClearEditor").addEventListener("click", clearAllVideos);
+
+function updateEditorInfoBar() {
+  const v = getActiveVideo();
+  if (!v) { $("#editorInfo").innerHTML = ""; return; }
+  const countBadge = editorVideos.length > 1
+    ? ` <span style="color:var(--accent);font-size:10px">(${editorVideos.length} videos)</span>`
+    : "";
+  $("#editorInfo").innerHTML = `
+    <span>📁 ${v.filename}${countBadge}</span>
+    <span>⏱ ${fmtTime(v.info.duration)}</span>
+    <span>🎥 ${v.info.video?.width || "?"}×${v.info.video?.height || "?"}</span>
+    <span>📦 ${v.info.size_mb} MB</span>
+  `;
+  // Enable export button when videos are loaded
+  const exportBtn = $("#btnExportFinal");
+  if (exportBtn) exportBtn.disabled = editorVideos.length === 0;
+}
+
+function renderVideoList() {
+  const container = $("#editorVideoList");
+  $("#editorVideoCount").textContent = editorVideos.length;
+
+  if (editorVideos.length === 0) {
+    container.innerHTML = '<div class="empty-hint-sm">No videos loaded</div>';
+    return;
+  }
+
+  container.innerHTML = editorVideos.map((v, i) => {
+    const subs = v.subtitles;
+    const subsBadge = subs.transcribed
+      ? `<span class="video-sb-subs-badge">💬${subs.segments.length}</span>`
+      : "";
+    return `
+      <div class="video-sidebar-item${v.id === activeVideoId ? ' active' : ''}"
+           data-vid="${v.id}" data-idx="${i}">
+        <span class="video-sb-drag" data-vid="${v.id}">⋮⋮</span>
+        <span class="video-sb-num">${i + 1}</span>
+        <span class="video-sb-name">${v.filename}</span>
+        ${subsBadge}
+        <span class="video-sb-dur">${fmtTime(v.info.duration)}</span>
+        <span class="video-sb-remove" data-vid="${v.id}">×</span>
+      </div>`;
+  }).join("");
+
+  // Click to select
+  container.querySelectorAll(".video-sidebar-item").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.classList.contains("video-sb-remove") || e.target.classList.contains("video-sb-drag")) return;
+      selectVideo(el.dataset.vid);
+    });
+  });
+
+  // Remove button
+  container.querySelectorAll(".video-sb-remove").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeVideo(el.dataset.vid);
+    });
+  });
+
+  // Drag to reorder (sidebar)
+  setupSidebarDragReorder(container);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  MULTI-TRACK TIMELINE — stacked lanes with subtitle blocks
+// ═══════════════════════════════════════════════════════════
+
+function renderMultiTrackTimeline() {
+  const container = $("#timelineMultiTrack");
+  if (!container) return;
+
+  if (editorVideos.length === 0) {
+    container.innerHTML = '<div class="tl-mt-placeholder">Add videos to see them on the timeline</div>';
+    return;
+  }
+
+  // Find the longest video for timeline scale
+  let maxDuration = 1;
+  editorVideos.forEach(v => {
+    if (v.info.duration > maxDuration) maxDuration = v.info.duration;
+  });
+
+  // Store for ruler/playhead reference
+  if (!state.editorInfo || state.editorInfo.duration < maxDuration) {
+    state.editorInfo = { duration: maxDuration };
+  }
+
+  container.innerHTML = editorVideos.map((v, i) => {
+    const isActive = v.id === activeVideoId;
+    const subs = v.subtitles;
+    const dur = v.info.duration;
+    const trim = getVideoTrim(v);
+    const hasTrim = trim.start > 0 || trim.end < dur;
+
+    // Video block position with trim
+    const blockLeftPct = (trim.start / maxDuration) * 100;
+    const blockWidthPct = ((trim.end - trim.start) / maxDuration) * 100;
+
+    // Build subtitle blocks HTML (only within trimmed range)
+    let subBlocksHTML = "";
+    if (subs.transcribed && subs.segments.length > 0) {
+      subBlocksHTML = subs.segments
+        .filter(seg => seg.end > trim.start && seg.start < trim.end)
+        .map(seg => {
+          const segStart = Math.max(seg.start, trim.start);
+          const segEnd = Math.min(seg.end, trim.end);
+          const leftPct = (segStart / maxDuration) * 100;
+          const widthPct = Math.max(((segEnd - segStart) / maxDuration) * 100, 0.3);
+          return `<div class="tl-mt-sub-block" style="left:${leftPct}%;width:${widthPct}%"></div>`;
+        }).join("");
+    }
+
+    // Trim indicators — dimmed areas before/after trim
+    const preTrimHTML = trim.start > 0
+      ? `<div class="tl-mt-trim-zone" style="left:0%;width:${blockLeftPct}%" title="Trimmed start: ${fmtTime(trim.start)}"></div>`
+      : "";
+    const postTrimHTML = trim.end < dur
+      ? `<div class="tl-mt-trim-zone" style="left:${blockLeftPct + blockWidthPct}%;width:${100 - blockLeftPct - blockWidthPct}%" title="Trimmed end: ${fmtTime(dur - trim.end)}"></div>`
+      : "";
+
+    return `
+      <div class="tl-mt-lane${isActive ? ' active' : ''}" data-vid="${v.id}" data-idx="${i}"
+           draggable="false">
+        <div class="tl-mt-lane-handle" data-vid="${v.id}" title="Drag to reorder">⋮⋮</div>
+        <div class="tl-mt-lane-label">
+          <span class="lane-num">${i + 1}</span>${v.filename}
+          ${hasTrim ? `<span style="font-size:9px;color:var(--yellow);margin-left:4px">✂️</span>` : ""}
+        </div>
+        <div class="tl-mt-lane-track" data-vid="${v.id}">
+          ${preTrimHTML}
+          <div class="tl-mt-video-block" data-vid="${v.id}"
+               style="left:${blockLeftPct}%;width:${blockWidthPct}%">
+            <div class="tl-mt-trim-handle left" data-vid="${v.id}" data-edge="left"></div>
+            <div class="tl-mt-trim-handle right" data-vid="${v.id}" data-edge="right"></div>
+          </div>
+          ${postTrimHTML}
+          ${subBlocksHTML}
+          <div class="tl-mt-playhead${isActive ? ' visible' : ''}" data-vid="${v.id}"></div>
+        </div>
+        <div class="tl-mt-lane-dur">${fmtTime(trim.end - trim.start)}</div>
+      </div>`;
+  }).join("");
+
+  // Click on lane → select that video
+  container.querySelectorAll(".tl-mt-lane").forEach(lane => {
+    lane.addEventListener("click", (e) => {
+      // Don't select if clicking the drag handle
+      if (e.target.closest(".tl-mt-lane-handle")) return;
+      selectVideo(lane.dataset.vid);
+    });
+  });
+
+  // Drag reorder on timeline lanes
+  setupLaneDragReorder(container);
+
+  // Trim handle events
+  setupTrimHandles(container);
+
+  // Re-render ruler
+  renderTimelineRuler($("#timelineRuler"));
+}
+
+function syncMultiTrackPlayhead() {
+  const vid = $("#editorVideo");
+  if (!vid || !vid.duration || isNaN(vid.duration)) return;
+
+  const t = vid.currentTime;
+  const maxDuration = state.editorInfo?.duration || 1;
+
+  $$(".tl-mt-playhead").forEach(ph => {
+    const laneVid = ph.dataset.vid;
+    const v = editorVideos.find(v => v.id === laneVid);
+    const pct = v ? (t / v.info.duration) * 100 : (t / maxDuration) * 100;
+    ph.style.left = Math.min(pct, 100) + "%";
+  });
+}
+
+// ── Sidebar drag reorder ──────────────────────────────────
+function setupSidebarDragReorder(container) {
+  let dragSrcIdx = -1;
+
+  container.querySelectorAll(".video-sb-drag").forEach(handle => {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const item = handle.closest(".video-sidebar-item");
+      dragSrcIdx = parseInt(item.dataset.idx);
+      item.style.opacity = "0.4";
+    });
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (dragSrcIdx < 0) return;
+    // Highlight target
+    container.querySelectorAll(".video-sidebar-item").forEach(el => {
+      el.classList.remove("drop-target");
+    });
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
+    if (target && parseInt(target.dataset.idx) !== dragSrcIdx) {
+      target.classList.add("drop-target");
+    }
+  });
+
+  document.addEventListener("mouseup", (e) => {
+    if (dragSrcIdx < 0) return;
+    const srcItem = container.querySelector(`.video-sidebar-item[data-idx="${dragSrcIdx}"]`);
+    if (srcItem) srcItem.style.opacity = "";
+
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
+    container.querySelectorAll(".video-sidebar-item").forEach(el => el.classList.remove("drop-target"));
+
+    if (target) {
+      const targetIdx = parseInt(target.dataset.idx);
+      if (targetIdx !== dragSrcIdx && targetIdx >= 0) {
+        reorderVideos(dragSrcIdx, targetIdx);
+      }
+    }
+    dragSrcIdx = -1;
+  });
+}
+
+// ── Lane drag reorder on timeline ─────────────────────────
+function setupLaneDragReorder(container) {
+  let dragLaneIdx = -1;
+
+  container.querySelectorAll(".tl-mt-lane-handle").forEach(handle => {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const lane = handle.closest(".tl-mt-lane");
+      dragLaneIdx = parseInt(lane.dataset.idx);
+      lane.classList.add("dragging");
+    });
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (dragLaneIdx < 0) return;
+    container.querySelectorAll(".tl-mt-lane").forEach(l => {
+      l.classList.remove("drop-target-above", "drop-target-below");
+    });
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-mt-lane");
+    if (target && parseInt(target.dataset.idx) !== dragLaneIdx) {
+      const targetIdx = parseInt(target.dataset.idx);
+      target.classList.add(targetIdx > dragLaneIdx ? "drop-target-below" : "drop-target-above");
+    }
+  });
+
+  document.addEventListener("mouseup", (e) => {
+    if (dragLaneIdx < 0) return;
+    const srcLane = container.querySelector(`.tl-mt-lane[data-idx="${dragLaneIdx}"]`);
+    if (srcLane) srcLane.classList.remove("dragging");
+
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-mt-lane");
+    container.querySelectorAll(".tl-mt-lane").forEach(l => {
+      l.classList.remove("drop-target-above", "drop-target-below");
+    });
+
+    if (target) {
+      const targetIdx = parseInt(target.dataset.idx);
+      if (targetIdx !== dragLaneIdx && targetIdx >= 0) {
+        reorderVideos(dragLaneIdx, targetIdx);
+      }
+    }
+    dragLaneIdx = -1;
+  });
+}
+
+function reorderVideos(fromIdx, toIdx) {
+  if (fromIdx === toIdx) return;
+  const item = editorVideos.splice(fromIdx, 1)[0];
+  editorVideos.splice(toIdx, 0, item);
+  editorVideos.forEach((v, i) => { v.order = i; });
+  renderVideoList();
+  renderMultiTrackTimeline();
+  toast("Videos reordered ✓", "success");
+}
+
+// ── Trim handle drag ──────────────────────────────────────
+function setupTrimHandles(container) {
+  container.querySelectorAll(".tl-mt-trim-handle").forEach(handle => {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const vid = handle.dataset.vid;
+      const edge = handle.dataset.edge;
+      const v = editorVideos.find(v => v.id === vid);
+      if (!v) return;
+
+      trimDrag = {
+        videoId: vid,
+        edge,
+        startX: e.clientX,
+        origStart: v.trimStart || 0,
+        origEnd: v.trimEnd || v.info.duration,
+      };
+
+      document.addEventListener("mousemove", onTrimDragMove);
+      document.addEventListener("mouseup", onTrimDragUp);
+    });
+  });
+}
+
+function onTrimDragMove(e) {
+  if (!trimDrag) return;
+  const v = editorVideos.find(v => v.id === trimDrag.videoId);
+  if (!v) return;
+
+  const track = document.querySelector(`.tl-mt-lane-track[data-vid="${trimDrag.videoId}"]`);
+  if (!track) return;
+  const rect = track.getBoundingClientRect();
+  const dx = e.clientX - trimDrag.startX;
+  const dSec = (dx / rect.width) * v.info.duration;
+
+  if (trimDrag.edge === "left") {
+    const newStart = Math.max(0, Math.min(trimDrag.origStart + dSec, (v.trimEnd || v.info.duration) - 0.5));
+    v.trimStart = newStart;
+  } else {
+    const newEnd = Math.max((v.trimStart || 0) + 0.5, Math.min(trimDrag.origEnd + dSec, v.info.duration));
+    v.trimEnd = newEnd;
+  }
+
+  // Live update: re-render just the blocks
+  updateLaneBlocks(v, track);
+}
+
+function updateLaneBlocks(v, track) {
+  const maxDuration = state.editorInfo?.duration || v.info.duration;
+  const trim = getVideoTrim(v);
+
+  const blockLeftPct = (trim.start / maxDuration) * 100;
+  const blockWidthPct = ((trim.end - trim.start) / maxDuration) * 100;
+
+  const videoBlock = track.querySelector(".tl-mt-video-block");
+  if (videoBlock) {
+    videoBlock.style.left = blockLeftPct + "%";
+    videoBlock.style.width = blockWidthPct + "%";
+  }
+
+  // Update trim zones
+  const zones = track.querySelectorAll(".tl-mt-trim-zone");
+  zones.forEach(z => z.remove());
+  if (trim.start > 0) {
+    const pre = document.createElement("div");
+    pre.className = "tl-mt-trim-zone";
+    pre.style.cssText = `left:0%;width:${blockLeftPct}%`;
+    track.insertBefore(pre, videoBlock);
+  }
+  if (trim.end < v.info.duration) {
+    const post = document.createElement("div");
+    post.className = "tl-mt-trim-zone";
+    post.style.cssText = `left:${blockLeftPct + blockWidthPct}%;width:${100 - blockLeftPct - blockWidthPct}%`;
+    track.appendChild(post);
+  }
+
+  // Update duration badge
+  const durEl = track.closest(".tl-mt-lane")?.querySelector(".tl-mt-lane-dur");
+  if (durEl) durEl.textContent = fmtTime(trim.end - trim.start);
+
+  // Update label trim indicator
+  const labelEl = track.closest(".tl-mt-lane")?.querySelector(".tl-mt-lane-label");
+  const hasTrim = trim.start > 0 || trim.end < v.info.duration;
+  if (labelEl) {
+    const existing = labelEl.querySelector("span[style]");
+    if (existing && !hasTrim) existing.remove();
+    else if (!existing && hasTrim) {
+      const badge = document.createElement("span");
+      badge.style.cssText = "font-size:9px;color:var(--yellow);margin-left:4px";
+      badge.textContent = "✂️";
+      labelEl.appendChild(badge);
+    }
+  }
+}
+
+function onTrimDragUp(e) {
+  document.removeEventListener("mousemove", onTrimDragMove);
+  document.removeEventListener("mouseup", onTrimDragUp);
+
+  if (trimDrag) {
+    const v = editorVideos.find(v => v.id === trimDrag.videoId);
+    if (v) {
+      const trim = getVideoTrim(v);
+      // Round and normalize
+      v.trimStart = Math.round(trim.start * 10) / 10;
+      v.trimEnd = Math.round(trim.end * 10) / 10;
+      // Reset if no meaningful trim
+      if (v.trimStart <= 0) delete v.trimStart;
+      if (v.trimEnd >= v.info.duration - 0.1) delete v.trimEnd;
+      renderMultiTrackTimeline();
+    }
+    trimDrag = null;
+  }
+}
+
+// editorOpenWorkspace — called after upload, shows workspace and loads video info
+async function editorOpenWorkspace(path, filename) {
+  try {
+    const info = await api("/api/local/info", { path });
+    if (info.error) { toast(info.error, "error"); return; }
+    info.path = path;
+
+    // Store info on the active video
+    const v = getActiveVideo();
+    if (v) {
+      v.info = info;
+      v.path = path;
+      v.filename = filename;
+    } else {
+      state.editorInfo = info;
+    }
+
+    $("#editorDropState").classList.add("hidden");
+    $("#editorWorkspace").classList.remove("hidden");
+
     const vid = $("#editorVideo");
-    vid.src = `/api/uploads/${editorVideoFilename}`;
+    vid.src = `/api/uploads/${filename}`;
     vid.load();
-    $("#editorInfo").innerHTML = `
-      <span>📁 ${info.filename}</span>
-      <span>⏱ ${fmtTime(info.duration)}</span>
-      <span>🎥 ${info.video?.width || "?"}×${info.video?.height || "?"}</span>
-      <span>📦 ${info.size_mb} MB</span>
-    `;
-    toast(`Loaded: ${info.filename}`, "success");
 
-    // Auto-generate thumbnails
+    updateEditorInfoBar();
     await editorGenThumbs();
   } catch (e) {
-    toast("Error: " + e.message, "error");
+    toast("Error loading video: " + e.message, "error");
   }
-  $("#btnLoadLocal").disabled = false;
-  $("#btnLoadLocal").textContent = "Load Video";
-});
+}
 
 $("#btnGenThumbs").addEventListener("click", editorGenThumbs);
 
@@ -1011,9 +1191,6 @@ async function editorGenThumbs() {
 
     const timeline = $("#editorTimeline");
     timeline.innerHTML = "";
-    timeline.style.display = "flex";
-    timeline.style.flexWrap = "wrap";
-    timeline.style.gap = "2px";
 
     state.editorThumbs = result.thumb_count;
     const baseUrl = result.thumb_base_url;
@@ -1262,10 +1439,23 @@ function renderTimeline() {
     track.appendChild(block);
   });
 
+  // Playhead indicator
+  const playhead = document.createElement("div");
+  playhead.className = "timeline-playhead";
+  playhead.id = "timelinePlayhead";
+  track.appendChild(playhead);
+
+  // Snap indicator (hidden by default)
+  const snapLine = document.createElement("div");
+  snapLine.className = "timeline-snap-line";
+  snapLine.id = "timelineSnapLine";
+  track.appendChild(snapLine);
+
   // Re-measure after render
   requestAnimationFrame(() => {
     tlState.trackWidth = track.clientWidth;
     updateAllBlockPositions();
+    syncTimelinePlayhead();
   });
 }
 
@@ -1302,6 +1492,15 @@ function renderTimelineRuler(ruler) {
     mark.textContent = fmtTime(t);
     ruler.appendChild(mark);
   }
+}
+
+function syncTimelinePlayhead() {
+  const playhead = $("#timelinePlayhead");
+  if (!playhead || !state.editorInfo) return;
+  const vid = $("#editorVideo");
+  if (!vid || !vid.duration || isNaN(vid.duration)) return;
+  const pct = (vid.currentTime / tlState.videoDuration) * 100;
+  playhead.style.left = pct + "%";
 }
 
 function updateAllBlockPositions() {
@@ -1393,12 +1592,28 @@ function onBlockPointerMove(e) {
     const timeEl = block.querySelector(".timeline-block-time");
     if (timeEl) timeEl.textContent = fmtTime(newEnd - newStart);
   }
+
+  // Show snap line at the current edge being dragged
+  const snapLine = $("#timelineSnapLine");
+  if (snapLine) {
+    let snapSec;
+    if (tlState.dragMode === "left") snapSec = newStart;
+    else if (tlState.dragMode === "right") snapSec = newEnd;
+    else snapSec = newStart; // body mode: show snap at new position
+    const snapPct = (snapSec / tlState.videoDuration) * 100;
+    snapLine.style.left = snapPct + "%";
+    snapLine.style.display = "block";
+  }
 }
 
 function onBlockPointerUp(e) {
   document.removeEventListener("pointermove", onBlockPointerMove);
   document.removeEventListener("pointerup", onBlockPointerUp);
   document.removeEventListener("pointercancel", onBlockPointerUp);
+
+  // Hide snap line
+  const snapLine = $("#timelineSnapLine");
+  if (snapLine) snapLine.style.display = "none";
 
   if (tlState.dragging !== null) {
     const idx = tlState.dragging;
@@ -1455,15 +1670,62 @@ $("#btnEditorOpenOut").addEventListener("click", async () => {
 });
 
 // ═══════════════════════════════════════════════════════════
-//  EDITOR SUBTITLES — Integrated into Editor tab
+//  EDITOR SUBTITLES — Unified full-featured subtitle editor
+//  (editorSubs.style is declared in the Editor module above;
+//   each video stores its own segments in video.subtitles)
 // ═══════════════════════════════════════════════════════════
 
-let editorSubs = {
-  segments: [],
-  style: { posY: 0.85, fontSize: 24, fontColor: "#ffffff" },
-  activeIdx: -1,
-  dragging: false,
-};
+// Render style presets inside the Editor subtitles panel
+function renderEvsPresets() {
+  const container = $("#evsPresets");
+  if (!container) return;
+  container.innerHTML = "";
+  SUB_PRESETS.forEach((preset, i) => {
+    const card = document.createElement("div");
+    card.className = "sub-preset-card" + (i === 0 ? " sub-preset-active" : "");
+    card.dataset.id = preset.id;
+    const p = preset.preview;
+    card.innerHTML = `
+      <div class="sub-preset-preview" style="background:${p.bg};${p.boxBg ? "padding:2px 5px;border-radius:2px;" : ""}">
+        <span style="color:${p.color};text-shadow:${p.shadow || "none"};font-weight:${p.bold ? 900 : 700};font-size:12px">Abc</span>
+      </div>
+      <span class="sub-preset-name">${preset.name}</span>`;
+    card.addEventListener("click", () => applyEvsPreset(preset));
+    container.appendChild(card);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  LANE TRIMMING — drag video block edges to trim
+// ═══════════════════════════════════════════════════════════
+
+let trimDrag = null; // {videoId, edge: 'left'|'right', startX, origVal}
+
+function getVideoTrim(video) {
+  return {
+    start: video.trimStart || 0,
+    end: video.trimEnd || video.info.duration,
+  };
+}
+
+function applyEvsPreset(preset) {
+  editorSubs.style.font_size      = preset.font_size;
+  editorSubs.style.font_color     = preset.font_color;
+  editorSubs.style.outline_color  = preset.outline_color;
+  editorSubs.style.outline_width  = preset.outline_width;
+  editorSubs.style.border_style   = preset.border_style;
+  editorSubs.style.back_color     = preset.back_color;
+  editorSubs.style.back_alpha     = preset.back_alpha || 0;
+
+  $("#evsFontSize").value = preset.font_size;
+  $("#evsFontSizeLabel").textContent = preset.font_size;
+  $("#evsFontColor").value = preset.font_color;
+
+  $$(".sub-preset-card").forEach(c => c.classList.remove("sub-preset-active"));
+  $(`.sub-preset-card[data-id="${preset.id}"]`)?.classList.add("sub-preset-active");
+
+  updateEvsOverlayStyle();
+}
 
 const evsVideo = $("#editorVideo");
 
@@ -1476,9 +1738,11 @@ evsVideo.addEventListener("timeupdate", () => {
   if (!evsVideo.paused) $("#evsSeekBar").value = Math.floor(evsVideo.currentTime * 10);
   updateEvsTime();
   syncEvsOverlay();
+  syncTimelinePlayhead();
+  syncMultiTrackPlayhead();
 });
-evsVideo.addEventListener("play",  () => { $("#evsPlayBtn").innerHTML = "⏸"; });
-evsVideo.addEventListener("pause", () => { $("#evsPlayBtn").innerHTML = "▶"; });
+evsVideo.addEventListener("play",  () => { $("#evsPlayBtn").textContent = "⏸"; });
+evsVideo.addEventListener("pause", () => { $("#evsPlayBtn").textContent = "▶"; });
 
 $("#evsPlayBtn").addEventListener("click", () => {
   if (evsVideo.paused) evsVideo.play(); else evsVideo.pause();
@@ -1504,7 +1768,21 @@ function syncEvsOverlay() {
   }
   const previewEl = $("#evsPreviewText");
   const seg = activeIdx >= 0 ? editorSubs.segments[activeIdx] : null;
-  previewEl.textContent = seg ? seg.text : "";
+
+  if (!seg) {
+    previewEl.innerHTML = "";
+  } else if (editorSubs.karaoke && seg.words && seg.words.length > 0) {
+    const activeWord = seg.words.find(w => t >= w.start && t <= w.end);
+    const hlColor = editorSubs.style.highlight_color || "#ffdd00";
+    previewEl.innerHTML = seg.words.map(w => {
+      const isActive = activeWord && w.start === activeWord.start;
+      return isActive
+        ? `<span style="color:${hlColor}">${w.word}</span>`
+        : `<span style="opacity:0.55">${w.word}</span>`;
+    }).join(" ");
+  } else {
+    previewEl.textContent = seg.text;
+  }
 
   if (activeIdx !== editorSubs.activeIdx) {
     editorSubs.activeIdx = activeIdx;
@@ -1512,20 +1790,55 @@ function syncEvsOverlay() {
     if (activeIdx >= 0) {
       const el = $(`.evs-seg-item[data-idx="${activeIdx}"]`);
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      triggerEvsAnimation();
     }
   }
 }
 
-function updateEvsOverlayStyle() {
-  const text = $("#evsPreviewText");
-  const vid = $("#editorVideo");
-  const assSize = editorSubs.style.fontSize || 24;
-  const scale = vid.clientHeight && vid.videoHeight ? vid.clientHeight / vid.videoHeight : 1;
-  text.style.fontSize = (assSize * scale) + "px";
-  text.style.color = editorSubs.style.fontColor;
+function updateEvsOverlayPosition() {
   const handle = $("#evsDragHandle");
-  handle.style.maxWidth = "86%";
-  handle.style.top = (editorSubs.style.posY * 100) + "%";
+  handle.style.left = (editorSubs.style.position_x_pct * 100) + "%";
+  handle.style.top  = (editorSubs.style.position_y_pct * 100) + "%";
+}
+
+function updateEvsOverlayStyle() {
+  const text   = $("#evsPreviewText");
+  const handle = $("#evsDragHandle");
+  const vid    = $("#editorVideo");
+  const assSize = editorSubs.style.font_size || 24;
+  const scale  = vid.clientHeight && vid.videoHeight ? vid.clientHeight / vid.videoHeight : 1;
+  const ow     = editorSubs.style.outline_width ?? 2.5;
+
+  text.style.fontSize = (assSize * scale) + "px";
+  text.style.color    = editorSubs.style.font_color || "#ffffff";
+  handle.style.maxWidth = (editorSubs.style.max_width_pct || 86) + "%";
+
+  if (ow > 0) {
+    const s = Math.round(ow);
+    const oc = editorSubs.style.outline_color || "#000000";
+    text.style.textShadow = `${s}px ${s}px 0 ${oc},${-s}px ${-s}px 0 ${oc},${s}px ${-s}px 0 ${oc},${-s}px ${s}px 0 ${oc}`;
+  } else {
+    text.style.textShadow = "none";
+  }
+
+  if (editorSubs.style.back_color && editorSubs.style.border_style === 3) {
+    const h = editorSubs.style.back_color.replace("#", "");
+    const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+    const a = 1 - (editorSubs.style.back_alpha || 0);
+    handle.style.background = `rgba(${r},${g},${b},${a})`;
+    handle.style.padding = "4px 12px";
+  } else {
+    handle.style.background = "transparent";
+    handle.style.padding = "4px 8px";
+  }
+}
+
+function triggerEvsAnimation() {
+  const handle = $("#evsDragHandle");
+  handle.classList.remove("sub-anim-fade", "sub-anim-slide", "sub-anim-pop");
+  void handle.offsetWidth; // force reflow
+  const anim = editorSubs.style.animation;
+  if (anim && anim !== "none") handle.classList.add(`sub-anim-${anim}`);
 }
 
 // ── Overlay drag ──────────────────────────────────────────
@@ -1533,13 +1846,18 @@ const evsDragHandle = $("#evsDragHandle");
 evsDragHandle.addEventListener("mousedown", (e) => {
   e.preventDefault();
   editorSubs.dragging = true;
+  const rect = evsDragHandle.getBoundingClientRect();
+  editorSubs.dragOffset.x = e.clientX - rect.left - rect.width / 2;
+  editorSubs.dragOffset.y = e.clientY - rect.top  - rect.height / 2;
   evsDragHandle.style.cursor = "grabbing";
 });
 document.addEventListener("mousemove", (e) => {
   if (!editorSubs.dragging) return;
-  const r = $("#evsVideoWrap").getBoundingClientRect();
-  editorSubs.style.posY = Math.max(0.05, Math.min(0.95, (e.clientY - r.top) / r.height));
-  evsDragHandle.style.top = (editorSubs.style.posY * 100) + "%";
+  const wrap = $("#evsVideoWrap");
+  const r = wrap.getBoundingClientRect();
+  editorSubs.style.position_x_pct = Math.max(0.05, Math.min(0.95, (e.clientX - editorSubs.dragOffset.x - r.left) / r.width));
+  editorSubs.style.position_y_pct = Math.max(0.05, Math.min(0.95, (e.clientY - editorSubs.dragOffset.y - r.top)  / r.height));
+  updateEvsOverlayPosition();
 });
 document.addEventListener("mouseup", () => {
   if (editorSubs.dragging) { editorSubs.dragging = false; evsDragHandle.style.cursor = "grab"; }
@@ -1547,82 +1865,123 @@ document.addEventListener("mouseup", () => {
 
 // ── Style controls ────────────────────────────────────────
 $("#evsFontSize").addEventListener("input", (e) => {
-  editorSubs.style.fontSize = parseInt(e.target.value);
+  editorSubs.style.font_size = parseInt(e.target.value);
+  $("#evsFontSizeLabel").textContent = e.target.value;
+  updateEvsOverlayStyle();
+});
+$("#evsMaxWidth").addEventListener("input", (e) => {
+  editorSubs.style.max_width_pct = parseInt(e.target.value);
+  $("#evsMaxWidthLabel").textContent = e.target.value + "%";
   updateEvsOverlayStyle();
 });
 $("#evsFontColor").addEventListener("input", (e) => {
-  editorSubs.style.fontColor = e.target.value;
+  editorSubs.style.font_color = e.target.value;
   updateEvsOverlayStyle();
 });
-$$(".evs-pos-btn").forEach(btn => {
+$("#evsHighlightColor").addEventListener("input", (e) => {
+  editorSubs.style.highlight_color = e.target.value;
+});
+$$(".pos-btn").forEach(btn => {
   btn.addEventListener("click", () => {
-    $$(".evs-pos-btn").forEach(b => b.classList.remove("sub-pos-active"));
-    btn.classList.add("sub-pos-active");
-    editorSubs.style.posY = parseFloat(btn.dataset.y);
-    $("#evsDragHandle").style.top = (editorSubs.style.posY * 100) + "%";
+    $$(".pos-btn").forEach(b => b.classList.remove("pos-btn-active"));
+    btn.classList.add("pos-btn-active");
+    editorSubs.style.position_y_pct = parseFloat(btn.dataset.y);
+    updateEvsOverlayPosition();
   });
+});
+$$(".anim-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $$(".anim-btn").forEach(b => b.classList.remove("anim-btn-active"));
+    btn.classList.add("anim-btn-active");
+    editorSubs.style.animation = btn.dataset.anim;
+    triggerEvsAnimation();
+  });
+});
+
+// ── Karaoke toggle ────────────────────────────────────────
+$("#evsKaraokeToggle").addEventListener("change", (e) => {
+  editorSubs.karaoke = e.target.checked;
+  $("#evsHighlightRow").classList.toggle("hidden", !editorSubs.karaoke);
 });
 
 // ── Transcribe ────────────────────────────────────────────
 $("#btnEditorTranscribe").addEventListener("click", async () => {
   if (!editorVideoPath) { toast("Load a video first", "error"); return; }
-  const btn = $("#btnEditorTranscribe");
-  btn.disabled = true;
-  btn.textContent = "Transcribiendo...";
+  const btn    = $("#btnEditorTranscribe");
+  const status = $("#evsStatus");
+  btn.disabled = true; btn.textContent = "Transcribing...";
+  status.classList.remove("hidden");
+  status.textContent = "Running Whisper... this may take a few minutes.";
 
   try {
     const result = await api("/api/subtitle/transcribe", {
       path: editorVideoPath,
       model: $("#evsModel").value,
-      language: "es",
+      language: $("#evsLanguage").value,
+      word_timestamps: editorSubs.karaoke,
     });
-    if (result.error) { toast(result.error, "error"); btn.disabled = false; btn.textContent = "🎙️ Transcribe"; return; }
+    if (result.error) {
+      status.textContent = "Error: " + result.error;
+      btn.disabled = false; btn.textContent = "🎙️ Transcribe"; return;
+    }
 
     const poll = setInterval(async () => {
       const job = await api("/api/job/" + result.job_id);
       if (job.status === "done" && job.result) {
         clearInterval(poll);
         editorSubs.segments = job.result.segments;
+        // Mark video as transcribed
+        const av = getActiveVideo();
+        if (av) {
+          av.subtitles.segments = job.result.segments;
+          av.subtitles.transcribed = true;
+        }
         renderEvsTranscript();
         $("#btnEditorBurnSubs").disabled = false;
-        btn.disabled = false;
-        btn.textContent = "🎙️ Transcribe";
-        toast(`${editorSubs.segments.length} segments transcribed ✓`, "success");
+        $("#evsSegCount").textContent = editorSubs.segments.length;
+        btn.disabled = false; btn.textContent = "🎙️ Transcribe";
+        status.classList.add("hidden");
+        renderMultiTrackTimeline();
+        renderVideoList();
+        toast(`${editorSubs.segments.length} segments ✓`, "success");
       } else if (job.status === "error") {
         clearInterval(poll);
-        btn.disabled = false;
-        btn.textContent = "🎙️ Transcribe";
-        toast(job.error, "error");
+        status.textContent = "Error: " + job.error;
+        btn.disabled = false; btn.textContent = "🎙️ Transcribe";
       } else {
-        btn.textContent = job.current || "Transcribiendo...";
+        status.textContent = job.current || "Transcribing...";
       }
     }, 2000);
   } catch (e) {
-    toast("Error: " + e.message, "error");
-    btn.disabled = false;
-    btn.textContent = "🎙️ Transcribe";
+    status.textContent = "Error: " + e.message;
+    btn.disabled = false; btn.textContent = "🎙️ Transcribe";
   }
 });
 
 // ── Render transcript ─────────────────────────────────────
 function renderEvsTranscript() {
   const list = $("#evsTranscript");
+  if (!list) return;
   list.innerHTML = "";
+  if (editorSubs.segments.length === 0) {
+    list.innerHTML = '<div class="empty-hint-sm">Transcribe to see segments</div>';
+    return;
+  }
   editorSubs.segments.forEach((seg, i) => {
     const div = document.createElement("div");
     div.className = "evs-seg-item";
     div.dataset.idx = i;
     div.innerHTML = `
       <span class="evs-seg-ts">${fmtTime(seg.start)}</span>
-      <span class="evs-seg-text" contenteditable="true" spellcheck="false">${seg.text}</span>
-    `;
+      <span class="evs-seg-text" contenteditable="true" spellcheck="false">${seg.text}</span>`;
     div.querySelector(".evs-seg-ts").addEventListener("click", () => {
-      evsVideo.currentTime = seg.start;
-      evsVideo.pause();
+      evsVideo.currentTime = seg.start; evsVideo.pause();
+      syncEvsOverlay();
     });
     const textEl = div.querySelector(".evs-seg-text");
     textEl.addEventListener("input", () => {
       editorSubs.segments[i].text = textEl.textContent.trim();
+      editorSubs.segments[i].words = []; // stale after manual edit
       if (editorSubs.activeIdx === i) syncEvsOverlay();
     });
     textEl.addEventListener("keydown", (e) => {
@@ -1632,7 +1991,7 @@ function renderEvsTranscript() {
   });
 }
 
-// ── Burn subtitles ────────────────────────────────────────
+// ── Burn subtitles (full style — same quality as standalone export) ───
 function hexToAssEvs(hex) {
   const h = hex.replace("#", "");
   return `&H00${h.slice(4,6)}${h.slice(2,4)}${h.slice(0,2)}`.toUpperCase();
@@ -1642,46 +2001,56 @@ $("#btnEditorBurnSubs").addEventListener("click", async () => {
   if (!editorVideoPath || editorSubs.segments.length === 0) {
     toast("Transcribe first", "error"); return;
   }
-  const btn = $("#btnEditorBurnSubs");
-  btn.disabled = true;
-  btn.textContent = "Burning...";
+  const btn    = $("#btnEditorBurnSubs");
+  const status = $("#evsExportStatus");
+  btn.disabled = true; btn.textContent = "Burning...";
+  status.classList.remove("hidden");
+  status.innerHTML = '<span style="color:var(--accent)">Burning subtitles into video...</span>';
+
+  const exportStyle = {
+    font_size:       editorSubs.style.font_size,
+    position_x_pct: editorSubs.style.position_x_pct,
+    position_y_pct: editorSubs.style.position_y_pct,
+    max_width_pct:   editorSubs.style.max_width_pct || 86,
+    primary_color:   hexToAssEvs(editorSubs.style.font_color   || "#ffffff"),
+    outline_color:   hexToAssEvs(editorSubs.style.outline_color || "#000000"),
+    highlight_color: hexToAssEvs(editorSubs.style.highlight_color || "#ffdd00"),
+    dim_color:       "&H80FFFFFF",
+    outline_width:   editorSubs.style.outline_width ?? 2.5,
+    border_style:    editorSubs.style.border_style  || 1,
+    back_color:      editorSubs.style.back_color    || null,
+    back_alpha:      editorSubs.style.back_alpha    || 0,
+    animation:       editorSubs.style.animation     || "none",
+  };
 
   try {
     const result = await api("/api/subtitle/burn", {
       path: editorVideoPath,
       segments: editorSubs.segments,
-      style: {
-        font_size: editorSubs.style.fontSize,
-        position_y_pct: editorSubs.style.posY,
-        primary_color: hexToAssEvs(editorSubs.style.fontColor),
-        outline_color: "&H00000000",
-        outline_width: 2.5,
-        border_style: 1,
-      },
+      style: exportStyle,
     });
-
-    if (result.error) { toast(result.error, "error"); btn.disabled = false; btn.textContent = "📼 Burn Subtitles"; return; }
-
+    if (result.error) {
+      status.innerHTML = `<span style="color:var(--red)">${result.error}</span>`;
+      btn.disabled = false; btn.textContent = "📼 Burn Subtitles"; return;
+    }
     const poll = setInterval(async () => {
       const job = await api("/api/job/" + result.job_id);
       if (job.status === "done" && job.result) {
         clearInterval(poll);
-        btn.disabled = false;
-        btn.textContent = "📼 Burn Subtitles";
-        toast(`Subtitles burned! → ${job.result.output.split("/").pop()}`, "success");
+        btn.disabled = false; btn.textContent = "📼 Burn Subtitles";
+        status.innerHTML = `<span style="color:var(--green)">Done! Output: ${job.result.output.split("/").pop()}</span>`;
+        toast("Subtitles burned ✓", "success");
       } else if (job.status === "error") {
         clearInterval(poll);
-        btn.disabled = false;
-        btn.textContent = "📼 Burn Subtitles";
-        toast(job.error, "error");
+        btn.disabled = false; btn.textContent = "📼 Burn Subtitles";
+        status.innerHTML = `<span style="color:var(--red)">${job.error}</span>`;
       } else {
-        btn.textContent = job.current || "Burning...";
+        status.innerHTML = `<span style="color:var(--accent)">${job.current || "Burning..."}</span>`;
       }
     }, 2000);
   } catch (e) {
-    toast("Error: " + e.message, "error");
-    btn.disabled = false;
-    btn.textContent = "📼 Burn Subtitles";
+    status.innerHTML = `<span style="color:var(--red)">${e.message}</span>`;
+    btn.disabled = false; btn.textContent = "📼 Burn Subtitles";
   }
 });
 
@@ -1850,7 +2219,7 @@ function updateWorkingVideo(outputPath, filename, action, rawCmd) {
     vid.currentTime = Math.min(currentTime, vid.duration || 0);
     if (wasPlaying) vid.play();
     vid.removeEventListener("loadedmetadata", seek);
-  }, { once: false });
+  }, { once: true }); // BUG FIX: was `false`, must be `true` to avoid stacking listeners
 
   // Add to history
   processingHistory.push({
@@ -1862,66 +2231,122 @@ function updateWorkingVideo(outputPath, filename, action, rawCmd) {
   });
   renderProcessingHistory();
 
-  // Clear editor clips and thumbnails since video changed
+  // Reset clips and timeline (video file changed)
   state.editorClips = [];
   renderEditorClips();
   state.editorInfo = null;
-  editorSubs.segments = [];
-  $("#evsTranscript").innerHTML = '<div class="empty-hint">Click <strong>🎙️ Transcribe</strong> to generate subtitles</div>';
-  $("#btnEditorBurnSubs").disabled = true;
-  $("#editorTimeline").innerHTML = '<div class="placeholder-msg"><div class="placeholder-icon">🖼️</div><p>Click <strong>Generate Thumbnails</strong> to update</p></div>';
+  $("#editorTimeline").innerHTML = '<div class="tl-placeholder">Click <strong>Thumbnails</strong> to update</div>';
+
+  // BUG FIX: only reset subtitles if the action changes timing.
+  // enhance_audio only re-encodes audio — video timing is unchanged,
+  // so existing subtitles remain valid.
+  const TIMING_SAFE_ACTIONS = ["enhance_audio"];
+  if (!TIMING_SAFE_ACTIONS.includes(action)) {
+    editorSubs.segments = [];
+    editorSubs.activeIdx = -1;
+    renderEvsTranscript();
+    $("#btnEditorBurnSubs").disabled = true;
+    $("#evsSegCount").textContent = "0";
+  }
 }
 
 function renderProcessingHistory() {
-  let container = $("#processingStack");
-  if (!container) {
-    // Create it if it doesn't exist
-    const panel = $("#cmdPanel");
-    container = document.createElement("div");
-    container.id = "processingStack";
-    container.className = "processing-stack";
-    container.innerHTML = '<div class="proc-title">📋 Pipeline de procesamiento</div><div class="proc-list" id="procList"></div><button class="btn btn-accent btn-full" id="btnExportFinal" style="margin-top:8px">💾 Exportar video final</button>';
-    panel.appendChild(container);
+  const container = $("#processingStack");
+  if (!container) return;
 
-    $("#btnExportFinal").addEventListener("click", exportFinalVideo);
+  if (processingHistory.length === 0) {
+    container.innerHTML = '<div class="empty-hint-sm">No operations yet</div>';
+  } else {
+    container.innerHTML = processingHistory.map((h, i) => `
+      <div class="proc-item">
+        <span class="proc-step">${i + 1}</span>
+        <div>
+          <div class="proc-label">${h.label}</div>
+          <div class="proc-cmd">${h.rawCmd}</div>
+        </div>
+      </div>`).join("");
   }
 
-  const list = $("#procList");
-  list.innerHTML = processingHistory.map((h, i) => `
-    <div class="proc-item">
-      <span class="proc-step">${i + 1}</span>
-      <span class="proc-label">${h.label}</span>
-      <span class="proc-cmd">"${h.rawCmd}"</span>
-    </div>
-  `).join("");
-
-  $("#btnExportFinal").disabled = processingHistory.length === 0;
+  const exportBtn = $("#btnExportFinal");
+  if (exportBtn) exportBtn.disabled = processingHistory.length === 0;
 }
 
-async function exportFinalVideo() {
-  if (!currentWorkingFile) { toast("Nothing to export", "error"); return; }
+async function exportAllVideos() {
+  if (editorVideos.length === 0) { toast("Nothing to export", "error"); return; }
+
+  const btn = $("#btnExportFinal");
+  const resultDiv = $("#cmdResult");
+  btn.disabled = true;
+  btn.textContent = "Exporting...";
+  resultDiv.classList.remove("hidden");
+  resultDiv.innerHTML = '<span style="color:var(--accent)">⏳ Processing all videos...</span>';
 
   try {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const result = await api("/api/local/export", {
-      path: currentWorkingFile.path,
-      label: `final_${timestamp}`,
-    });
-    if (result.ok) {
-      toast(`Exportado: ${result.filename} ✓`, "success");
-      $("#cmdResult").classList.remove("hidden");
-      $("#cmdResult").classList.add("success");
-      $("#cmdResult").innerHTML = `
-        <div class="cmd-msg">✅ Video final exportado</div>
-        <div class="cmd-detail">📁 ${result.filename}</div>
-        <div class="cmd-detail">📦 ${fmtSize(result.size_mb)}</div>
-        <div class="cmd-detail" style="font-size:10px;opacity:0.7">📂 ~/Desktop/yt-clipper-output/</div>
-        <button class="btn btn-sm" style="margin-top:6px" onclick="fetch('/api/open-output',{method:'POST'})">📂 Abrir carpeta de output</button>
-      `;
+    // Build payload: each video with its trim + subtitles
+    const payload = editorVideos.map(v => ({
+      path: v.path,
+      trimStart: v.trimStart || 0,
+      trimEnd: v.trimEnd || v.info.duration,
+      subtitles: v.subtitles.transcribed ? {
+        segments: v.subtitles.segments,
+        style: {
+          font_size: editorSubs.style.font_size,
+          position_x_pct: editorSubs.style.position_x_pct,
+          position_y_pct: editorSubs.style.position_y_pct,
+          max_width_pct: editorSubs.style.max_width_pct || 86,
+          primary_color: editorSubs.style.font_color || "#ffffff",
+          outline_color: editorSubs.style.outline_color || "#000000",
+          highlight_color: editorSubs.style.highlight_color || "#ffdd00",
+          dim_color: "#80FFFFFF",
+          outline_width: editorSubs.style.outline_width ?? 2.5,
+          border_style: editorSubs.style.border_style || 1,
+          back_color: editorSubs.style.back_color || null,
+          back_alpha: editorSubs.style.back_alpha || 0,
+          animation: editorSubs.style.animation || "none",
+        }
+      } : null,
+    }));
+
+    const concatResult = await api("/api/export/concat", { videos: payload });
+
+    if (concatResult.error) {
+      throw new Error(concatResult.error);
     }
+
+    // Poll for completion
+    const jobResult = await new Promise((resolve, reject) => {
+      const poll = setInterval(async () => {
+        const job = await api("/api/job/" + concatResult.job_id);
+        if (job.status === "done" && job.result) {
+          clearInterval(poll);
+          resolve(job.result);
+        } else if (job.status === "error") {
+          clearInterval(poll);
+          reject(new Error(job.error));
+        } else {
+          resultDiv.innerHTML = `<span style="color:var(--accent)">⏳ ${job.current || "Processing..."}</span>`;
+        }
+      }, 1500);
+    });
+
+    const subsCount = editorVideos.filter(v => v.subtitles.transcribed).length;
+    resultDiv.classList.add("success");
+    resultDiv.innerHTML = `
+      <div class="cmd-msg">✅ ${jobResult.video_count} videos concatenados</div>
+      <div class="cmd-detail">📁 ${jobResult.filename}</div>
+      <div class="cmd-detail">📦 ${fmtSize(jobResult.size_mb)}</div>
+      ${subsCount > 0 ? `<div class="cmd-detail" style="color:var(--green)">💬 ${subsCount} videos with subtitles</div>` : ""}
+      <div class="cmd-detail" style="font-size:10px;opacity:0.7">📂 ~/Desktop/yt-clipper-output/</div>
+      <button class="btn btn-sm" style="margin-top:6px" onclick="fetch('/api/open-output',{method:'POST'})">📂 Open output folder</button>
+    `;
+    toast(`Exported ${jobResult.video_count} videos ✓`, "success");
   } catch (e) {
+    resultDiv.classList.add("error");
+    resultDiv.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
     toast("Error: " + e.message, "error");
   }
+  btn.disabled = false;
+  btn.textContent = "🚀 Export All";
 }
 
 $("#btnCmdRun").addEventListener("click", runCommand);
@@ -1929,10 +2354,10 @@ $("#cmdInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });
 
-// Chip clicks
-$$(".cmd-chip").forEach(chip => {
-  chip.addEventListener("click", () => {
-    $("#cmdInput").value = chip.dataset.cmd;
+// Toolbar cmd-button clicks
+$$(".tool-cmd").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $("#cmdInput").value = btn.dataset.cmd;
     runCommand();
   });
 });
@@ -2040,6 +2465,9 @@ async function runCommand() {
     btn.textContent = "Ejecutar";
   }
 }
+
+// ── Export All ────────────────────────────────────────
+$("#btnExportFinal").addEventListener("click", exportAllVideos);
 
 // ── Init ─────────────────────────────────────────────────
 console.log("YT Clipper ready ✂️ | YouTube · Subtitles · Editor");
