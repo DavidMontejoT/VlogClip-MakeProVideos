@@ -286,6 +286,49 @@
     <div class="editor-main hidden" id="editorMain">
       <div class="editor-info" id="editorInfo"></div>
 
+      <!-- Video Preview + Subtitles -->
+      <div class="editor-video-sub hidden" id="editorVideoSub">
+        <div class="evs-layout">
+          <!-- Left: Video -->
+          <div class="evs-video-col">
+            <div class="evs-video-wrap" id="evsVideoWrap">
+              <video id="editorVideo" playsinline preload="metadata"></video>
+              <div class="evs-sub-overlay">
+                <div class="evs-drag-handle" id="evsDragHandle">
+                  <span id="evsPreviewText"></span>
+                </div>
+              </div>
+            </div>
+            <div class="evs-playback">
+              <button id="evsPlayBtn" class="btn btn-sm">▶</button>
+              <input type="range" id="evsSeekBar" min="0" max="1000" value="0" step="1">
+              <span id="evsTimeLabel" class="evs-time">0:00</span>
+            </div>
+            <div class="evs-style-mini">
+              <button class="btn btn-sm btn-accent" id="btnEditorTranscribe">🎙️ Transcribe</button>
+              <button class="btn btn-sm" id="btnEditorBurnSubs" disabled>📼 Burn Subtitles</button>
+              <span class="evs-style-sep">|</span>
+              <select id="evsModel" class="evs-sel-sm">
+                <option value="tiny">Tiny</option>
+                <option value="base">Base</option>
+                <option value="small">Small</option>
+                <option value="medium" selected>Medium</option>
+              </select>
+              <input type="range" id="evsFontSize" min="14" max="48" value="24" title="Font size" class="evs-range-sm">
+              <input type="color" id="evsFontColor" value="#ffffff" title="Color" class="evs-color-sm">
+              <button class="btn btn-sm sub-pos-btn evs-pos-btn" data-y="0.12" title="Top">⬆</button>
+              <button class="btn btn-sm sub-pos-btn evs-pos-btn sub-pos-active" data-y="0.85" title="Bottom">⬇</button>
+            </div>
+          </div>
+          <!-- Right: Transcript -->
+          <div class="evs-transcript-col">
+            <div class="evs-transcript-list" id="evsTranscript">
+              <div class="empty-hint">Click <strong>🎙️ Transcribe</strong> to generate subtitles</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="editor-controls">
         <label>Thumbnail interval:</label>
         <select id="editorInterval">
@@ -297,6 +340,28 @@
         <button class="btn btn-sm" id="btnGenThumbs">Generate Thumbnails</button>
         <span class="editor-hint hidden" id="editorThumbStatus"></span>
         <button class="btn btn-sm btn-accent" id="btnAnalyze" style="margin-left:auto">🧠 Find Best Clips</button>
+      </div>
+
+      <!-- Command Panel -->
+      <div class="cmd-panel hidden" id="cmdPanel">
+        <div class="cmd-header">
+          <span>💬 Comandos</span>
+          <span class="cmd-hint">Ej: "quita los silencios", "mejora la voz", "recorta de 10 a 30", "busca los mejores momentos"</span>
+        </div>
+        <div class="cmd-input-row">
+          <input type="text" id="cmdInput" placeholder="Escribí un comando en español..." autocomplete="off">
+          <button class="btn btn-accent" id="btnCmdRun">Ejecutar</button>
+        </div>
+        <div class="cmd-examples">
+          <button class="cmd-chip" data-cmd="quita los espacios en silencio">🔇 Quitar silencios</button>
+          <button class="cmd-chip" data-cmd="recorta de 30 a 90">✂️ Recortar 30→90</button>
+          <button class="cmd-chip" data-cmd="genera subtítulos">💬 Transcribir</button>
+          <button class="cmd-chip" data-cmd="busca los mejores momentos">🧠 Smart Picks</button>
+          <button class="cmd-chip" data-cmd="cambia velocidad a 2x">⏩ Velocidad 2x</button>
+          <button class="cmd-chip" data-cmd="invierte el video">🔄 Invertir</button>
+          <button class="cmd-chip" data-cmd="mejora la voz">🎙️ Mejorar voz</button>
+        </div>
+        <div class="cmd-result hidden" id="cmdResult"></div>
       </div>
 
       <div class="analyze-panel hidden" id="analyzePanel">
@@ -320,6 +385,18 @@
         <input type="text" id="editorClipLabel" placeholder="Clip name" class="clip-name-input">
         <button class="btn btn-sm btn-accent" id="btnEditorCut">✂️ Cut Clip</button>
         <button class="btn btn-sm btn-ghost" id="btnEditorClear">Clear</button>
+      </div>
+
+      <!-- Timeline Bar -->
+      <div class="editor-timeline-bar hidden" id="editorTimelineBar">
+        <div class="timeline-header">
+          <span class="timeline-title">⏱ Timeline</span>
+          <span class="timeline-hint">Drag edges to adjust timing · Drag body to shift</span>
+        </div>
+        <div class="timeline-ruler" id="timelineRuler"></div>
+        <div class="timeline-track" id="timelineTrack">
+          <div class="timeline-placeholder">No clips yet — select a range and cut</div>
+        </div>
       </div>
 
       <div class="editor-clips" id="editorClips">

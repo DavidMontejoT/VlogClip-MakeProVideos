@@ -28,6 +28,11 @@ if os.path.exists(_ffmpeg_full):
     FFMPEG_BIN = _ffmpeg_full
 
 
+def _margin_lr(video_width: int) -> int:
+    """Calculate left/right margins for 86% usable text width."""
+    return int(video_width * 0.07)  # (1 - 0.86) / 2
+
+
 def fmt_ass(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
@@ -160,10 +165,11 @@ ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
 ScaledBorderAndShadow: yes
+WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,40,40,{margin_v},1
+Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{_margin_lr(video_width)},{_margin_lr(video_width)},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -252,10 +258,11 @@ ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
 ScaledBorderAndShadow: yes
+WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,40,40,{margin_v},1
+Style: Default,{FONT_NAME},{font_size},{primary_color},&H000000FF,{outline_color},{back_color_ass},-1,0,0,0,100,100,0,0,{border_style},{outline_width},0,2,{_margin_lr(video_width)},{_margin_lr(video_width)},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -303,6 +310,8 @@ def process_video(video_path: str, output_path: str = None, model_size: str = No
         base = Path(video_path).stem
         output_path = str(Path(video_path).parent / f"{base}_subtitled.mp4")
     ass_path = str(Path(output_path).with_suffix(".ass"))
+    srt_path = str(Path(output_path).with_suffix(".srt"))
+    json_path = str(Path(output_path).with_suffix(".transcript.json"))
 
     segments = segments_override if segments_override else transcribe(video_path, model_size, language)
 
@@ -312,12 +321,37 @@ def process_video(video_path: str, output_path: str = None, model_size: str = No
         generate_ass_karaoke(segments, ass_path, style=style, video_width=w, video_height=h)
     else:
         generate_ass(segments, ass_path, style=style, video_width=w, video_height=h)
+
+    # Save SRT and JSON alongside the ASS
+    _save_srt(segments, srt_path)
+    _save_transcript_json(segments, json_path)
+
     burn_subtitles(video_path, ass_path, output_path)
-    try:
-        os.remove(ass_path)
-    except Exception:
-        pass
-    return {"output": output_path, "segments": segments, "count": len(segments)}
+    # Keep ASS/SRT/JSON for reuse
+    return {"output": output_path, "segments": segments, "count": len(segments),
+            "ass": ass_path, "srt": srt_path, "json": json_path}
+
+
+def _save_srt(segments: list[dict], output_path: str):
+    """Save segments as SRT subtitle file."""
+    def srt_time(sec):
+        h = int(sec // 3600); m = int((sec % 3600) // 60)
+        s = int(sec % 60); ms = int((sec - int(sec)) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, 1):
+            f.write(f"{i}\n")
+            f.write(f"{srt_time(seg['start'])} --> {srt_time(seg['end'])}\n")
+            f.write(f"{seg['text']}\n\n")
+
+
+def _save_transcript_json(segments: list[dict], output_path: str):
+    """Save transcript as JSON for reuse/caching."""
+    import json
+    data = [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in segments]
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

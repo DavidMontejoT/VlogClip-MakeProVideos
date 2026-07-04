@@ -696,13 +696,18 @@ function updateSubOverlayPosition() {
 function updateSubOverlayStyle() {
   const text = $("#subPreviewText");
   const handle = $("#subDragHandle");
-  const size = subStyle.font_size || 24;
+  const vid = $("#subVideo");
+  const assSize = subStyle.font_size || 24;
+  // WYSIWYG: scale ASS pt to screen px based on actual display ratio
+  const scale = vid.clientHeight && vid.videoHeight ? vid.clientHeight / vid.videoHeight : 1;
+  const size = assSize * scale;
   const color = subStyle.font_color || "#ffffff";
   const oc = subStyle.outline_color || "#000000";
   const ow = subStyle.outline_width ?? 2.5;
 
   text.style.fontSize = size + "px";
   text.style.color = color;
+  handle.style.maxWidth = "86%";
 
   if (ow > 0) {
     const s = Math.round(ow);
@@ -923,20 +928,30 @@ $("#btnExportSubs").addEventListener("click", async () => {
 // ═══════════════════════════════════════════════════════════
 
 let editorVideoPath = "";
+let editorVideoFilename = "";
 
 // Setup drop zone
 setupDropZone("editorDropZone", "editorFileInput", (result) => {
   editorVideoPath = result.path;
+  editorVideoFilename = result.filename;
+  currentWorkingFile = { path: result.path, filename: result.filename };
+  processingHistory = [];
+  renderProcessingHistory();
   $("#editorVideoPath").value = result.filename;
   $("#editorPathRow").classList.remove("hidden");
 });
 
 $("#btnClearEditor").addEventListener("click", () => {
   editorVideoPath = "";
+  editorVideoFilename = "";
+  currentWorkingFile = null;
+  processingHistory = [];
   $("#editorVideoPath").value = "";
   $("#editorPathRow").classList.add("hidden");
   resetDropZone("editorDropZone");
   $("#editorMain").classList.add("hidden");
+  $("#cmdPanel").classList.add("hidden");
+  $("#editorVideoSub").classList.add("hidden");
 });
 
 $("#btnLoadLocal").addEventListener("click", async () => {
@@ -953,6 +968,13 @@ $("#btnLoadLocal").addEventListener("click", async () => {
     state.editorInfo.path = editorVideoPath;
 
     $("#editorMain").classList.remove("hidden");
+    $("#cmdPanel").classList.remove("hidden");
+    $("#editorVideoSub").classList.remove("hidden");
+
+    // Setup video player
+    const vid = $("#editorVideo");
+    vid.src = `/api/uploads/${editorVideoFilename}`;
+    vid.load();
     $("#editorInfo").innerHTML = `
       <span>📁 ${info.filename}</span>
       <span>⏱ ${fmtTime(info.duration)}</span>
@@ -1121,8 +1143,12 @@ function renderEditorClips() {
   if (state.editorClips.length === 0) {
     list.innerHTML = '<div class="empty-hint">No clips cut yet</div>';
     $("#btnEditorOpenOut").classList.add("hidden");
+    $("#editorTimelineBar").classList.add("hidden");
     return;
   }
+
+  $("#btnEditorOpenOut").classList.remove("hidden");
+  $("#editorTimelineBar").classList.remove("hidden");
 
   state.editorClips.forEach((clip, i) => {
     const card = document.createElement("div");
@@ -1136,11 +1162,527 @@ function renderEditorClips() {
     list.appendChild(card);
   });
 
-  $("#btnEditorOpenOut").classList.remove("hidden");
+  renderTimeline();
 }
+
+// ═══════════════════════════════════════════════════════════
+//  TIMELINE — Drag-to-adjust clip timing
+// ═══════════════════════════════════════════════════════════
+
+let tlState = {
+  dragging: null,        // index of clip being dragged, or null
+  dragMode: null,        // "body" | "left" | "right"
+  dragStartX: 0,         // mouse X when drag started
+  dragOrigStart: 0,      // clip.start before drag
+  dragOrigEnd: 0,        // clip.end before drag
+  trackWidth: 0,         // pixel width of track
+  videoDuration: 0,      // cached video duration in sec
+  snapSec: 1,            // snap interval in seconds
+};
+
+function pxToSec(px) {
+  if (tlState.trackWidth <= 0 || tlState.videoDuration <= 0) return 0;
+  return (px / tlState.trackWidth) * tlState.videoDuration;
+}
+function secToPx(sec) {
+  if (tlState.videoDuration <= 0) return 0;
+  return (sec / tlState.videoDuration) * tlState.trackWidth;
+}
+function snapTime(sec) {
+  return Math.round(sec / tlState.snapSec) * tlState.snapSec;
+}
+
+function renderTimeline() {
+  if (!state.editorInfo) return;
+  const track = $("#timelineTrack");
+  const ruler = $("#timelineRuler");
+
+  tlState.videoDuration = state.editorInfo.duration;
+  tlState.trackWidth = track.clientWidth || 800;
+
+  // Build ruler
+  renderTimelineRuler(ruler);
+
+  // Build blocks
+  track.innerHTML = "";
+
+  if (state.editorClips.length === 0) {
+    track.innerHTML = '<div class="timeline-placeholder">No clips yet — select a range and cut</div>';
+    return;
+  }
+
+  // Color palette for blocks
+  const colors = [
+    { bg: "rgba(31,111,235,0.25)", border: "rgba(31,111,235,0.5)", label: "var(--accent)" },
+    { bg: "rgba(63,185,80,0.22)", border: "rgba(63,185,80,0.45)", label: "var(--green)" },
+    { bg: "rgba(210,153,29,0.22)", border: "rgba(210,153,29,0.45)", label: "var(--yellow)" },
+    { bg: "rgba(248,81,73,0.22)", border: "rgba(248,81,73,0.4)", label: "var(--red)" },
+    { bg: "rgba(163,113,247,0.22)", border: "rgba(163,113,247,0.45)", label: "#a371f7" },
+    { bg: "rgba(86,211,200,0.22)", border: "rgba(86,211,200,0.45)", label: "#56d3c8" },
+  ];
+
+  state.editorClips.forEach((clip, i) => {
+    const c = colors[i % colors.length];
+    const leftPct = (clip.start / tlState.videoDuration) * 100;
+    const widthPct = ((clip.end - clip.start) / tlState.videoDuration) * 100;
+
+    const block = document.createElement("div");
+    block.className = "timeline-block";
+    block.dataset.index = i;
+    block.style.left = leftPct + "%";
+    block.style.width = widthPct + "%";
+    block.style.background = `linear-gradient(135deg, ${c.bg}, ${c.bg.replace(/0\.\d+/, (m) => (parseFloat(m) + 0.08).toFixed(2))})`;
+    block.style.borderColor = c.border;
+
+    const label = document.createElement("div");
+    label.className = "timeline-block-label";
+    label.style.color = c.label;
+    label.textContent = clip.label;
+
+    const time = document.createElement("div");
+    time.className = "timeline-block-time";
+    time.textContent = fmtTime(clip.end - clip.start);
+
+    const handleL = document.createElement("div");
+    handleL.className = "timeline-block-handle left";
+
+    const handleR = document.createElement("div");
+    handleR.className = "timeline-block-handle right";
+
+    block.appendChild(label);
+    block.appendChild(time);
+    block.appendChild(handleL);
+    block.appendChild(handleR);
+
+    // ── Pointer events for dragging ──
+    block.addEventListener("pointerdown", (e) => onBlockPointerDown(e, i));
+    handleL.addEventListener("pointerdown", (e) => { e.stopPropagation(); onBlockPointerDown(e, i, "left"); });
+    handleR.addEventListener("pointerdown", (e) => { e.stopPropagation(); onBlockPointerDown(e, i, "right"); });
+
+    track.appendChild(block);
+  });
+
+  // Re-measure after render
+  requestAnimationFrame(() => {
+    tlState.trackWidth = track.clientWidth;
+    updateAllBlockPositions();
+  });
+}
+
+function renderTimelineRuler(ruler) {
+  ruler.innerHTML = "";
+  const dur = tlState.videoDuration;
+  if (dur <= 0) return;
+
+  // Choose tick interval based on duration
+  let tickInterval;
+  if (dur <= 30) tickInterval = 5;
+  else if (dur <= 120) tickInterval = 10;
+  else if (dur <= 600) tickInterval = 30;
+  else if (dur <= 1800) tickInterval = 60;
+  else tickInterval = 120;
+
+  const minorInterval = tickInterval / 4;
+
+  // Minor ticks
+  for (let t = 0; t <= dur; t += minorInterval) {
+    const pct = (t / dur) * 100;
+    const tick = document.createElement("div");
+    tick.className = "timeline-ruler-tick" + (t % tickInterval === 0 ? " major" : "");
+    tick.style.left = pct + "%";
+    ruler.appendChild(tick);
+  }
+
+  // Major tick labels
+  for (let t = 0; t <= dur; t += tickInterval) {
+    const pct = (t / dur) * 100;
+    const mark = document.createElement("div");
+    mark.className = "timeline-ruler-mark";
+    mark.style.left = pct + "%";
+    mark.textContent = fmtTime(t);
+    ruler.appendChild(mark);
+  }
+}
+
+function updateAllBlockPositions() {
+  const track = $("#timelineTrack");
+  const blocks = track.querySelectorAll(".timeline-block");
+  blocks.forEach(block => {
+    const i = parseInt(block.dataset.index);
+    if (i >= 0 && i < state.editorClips.length) {
+      const clip = state.editorClips[i];
+      block.style.left = ((clip.start / tlState.videoDuration) * 100) + "%";
+      block.style.width = (((clip.end - clip.start) / tlState.videoDuration) * 100) + "%";
+      const timeEl = block.querySelector(".timeline-block-time");
+      if (timeEl) timeEl.textContent = fmtTime(clip.end - clip.start);
+      const labelEl = block.querySelector(".timeline-block-label");
+      if (labelEl) labelEl.textContent = clip.label;
+    }
+  });
+}
+
+// ── Drag Handlers ────────────────────────────────────────
+
+function onBlockPointerDown(e, index, mode = "body") {
+  e.preventDefault();
+  const track = $("#timelineTrack");
+  const block = track.querySelector(`.timeline-block[data-index="${index}"]`);
+  if (!block) return;
+
+  tlState.dragging = index;
+  tlState.dragMode = mode;
+  tlState.dragStartX = e.clientX;
+  tlState.dragOrigStart = state.editorClips[index].start;
+  tlState.dragOrigEnd = state.editorClips[index].end;
+  tlState.trackWidth = track.clientWidth;
+
+  block.classList.add("dragging");
+  if (mode !== "body") block.classList.add("dragging-edge");
+  block.setPointerCapture(e.pointerId);
+
+  // Listeners on document for move & up
+  document.addEventListener("pointermove", onBlockPointerMove);
+  document.addEventListener("pointerup", onBlockPointerUp);
+  document.addEventListener("pointercancel", onBlockPointerUp);
+}
+
+function onBlockPointerMove(e) {
+  if (tlState.dragging === null) return;
+
+  const idx = tlState.dragging;
+  const clip = state.editorClips[idx];
+  const dx = e.clientX - tlState.dragStartX;
+  const dSec = snapTime(pxToSec(dx));
+  const minDur = 1; // minimum clip duration in seconds
+
+  let newStart = clip.start;
+  let newEnd = clip.end;
+
+  switch (tlState.dragMode) {
+    case "left":
+      newStart = snapTime(tlState.dragOrigStart + pxToSec(dx));
+      newStart = Math.max(0, Math.min(newStart, tlState.dragOrigEnd - minDur));
+      break;
+    case "right":
+      newEnd = snapTime(tlState.dragOrigEnd + pxToSec(dx));
+      newEnd = Math.max(tlState.dragOrigStart + minDur, Math.min(newEnd, tlState.videoDuration));
+      break;
+    case "body":
+      newStart = snapTime(tlState.dragOrigStart + pxToSec(dx));
+      newEnd = snapTime(tlState.dragOrigEnd + pxToSec(dx));
+      newStart = Math.max(0, newStart);
+      newEnd = Math.min(tlState.videoDuration, newEnd);
+      if (newEnd - newStart < minDur) {
+        // Clamp: if would be too short, revert
+        if (dx > 0) { newEnd = newStart + minDur; }
+        else { newStart = newEnd - minDur; }
+      }
+      break;
+  }
+
+  // Update clip data in place
+  clip.start = newStart;
+  clip.end = newEnd;
+
+  // Update block visually
+  const track = $("#timelineTrack");
+  const block = track.querySelector(`.timeline-block[data-index="${idx}"]`);
+  if (block) {
+    block.style.left = ((newStart / tlState.videoDuration) * 100) + "%";
+    block.style.width = (((newEnd - newStart) / tlState.videoDuration) * 100) + "%";
+    const timeEl = block.querySelector(".timeline-block-time");
+    if (timeEl) timeEl.textContent = fmtTime(newEnd - newStart);
+  }
+}
+
+function onBlockPointerUp(e) {
+  document.removeEventListener("pointermove", onBlockPointerMove);
+  document.removeEventListener("pointerup", onBlockPointerUp);
+  document.removeEventListener("pointercancel", onBlockPointerUp);
+
+  if (tlState.dragging !== null) {
+    const idx = tlState.dragging;
+    const clip = state.editorClips[idx];
+    const track = $("#timelineTrack");
+    const block = track.querySelector(`.timeline-block[data-index="${idx}"]`);
+    if (block) {
+      block.classList.remove("dragging", "dragging-edge");
+    }
+
+    // Show change
+    const oldStart = tlState.dragOrigStart;
+    const oldEnd = tlState.dragOrigEnd;
+    if (clip.start !== oldStart || clip.end !== oldEnd) {
+      toast(`Adjusted: ${fmtTime(clip.start)} → ${fmtTime(clip.end)}`, "success");
+      // Update the clip list card text without full re-render
+      const cards = $$("#editorClipList .clip-card");
+      if (cards[idx]) {
+        const rangeEl = cards[idx].querySelector(".clip-card-range");
+        if (rangeEl) rangeEl.textContent = `${fmtTime(clip.start)} → ${fmtTime(clip.end)} · ${clip.file}`;
+        const durEl = cards[idx].querySelector(".clip-card-dur");
+        if (durEl) durEl.textContent = fmtSize(clip.size);
+      }
+    }
+
+    tlState.dragging = null;
+    tlState.dragMode = null;
+  }
+}
+
+// ── Timeline click to seek / add marker ──────────────────
+$("#timelineTrack").addEventListener("click", (e) => {
+  // Only if clicking on empty track (not a block)
+  if (e.target !== e.currentTarget) return;
+  // Could be used to set playhead position; for now just show time
+  const rect = e.currentTarget.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const t = snapTime(pxToSec(px));
+  toast(`Timeline: ${fmtTime(t)}`, "success");
+});
+
+// ── Re-render on resize ──────────────────────────────────
+window.addEventListener("resize", () => {
+  if (state.editorClips.length > 0) {
+    const track = $("#timelineTrack");
+    tlState.trackWidth = track.clientWidth;
+    updateAllBlockPositions();
+    renderTimelineRuler($("#timelineRuler"));
+  }
+});
 
 $("#btnEditorOpenOut").addEventListener("click", async () => {
   await api("/api/open-output");
+});
+
+// ═══════════════════════════════════════════════════════════
+//  EDITOR SUBTITLES — Integrated into Editor tab
+// ═══════════════════════════════════════════════════════════
+
+let editorSubs = {
+  segments: [],
+  style: { posY: 0.85, fontSize: 24, fontColor: "#ffffff" },
+  activeIdx: -1,
+  dragging: false,
+};
+
+const evsVideo = $("#editorVideo");
+
+// ── Video playback ────────────────────────────────────────
+evsVideo.addEventListener("loadedmetadata", () => {
+  $("#evsSeekBar").max = Math.floor(evsVideo.duration * 10);
+  updateEvsTime();
+});
+evsVideo.addEventListener("timeupdate", () => {
+  if (!evsVideo.paused) $("#evsSeekBar").value = Math.floor(evsVideo.currentTime * 10);
+  updateEvsTime();
+  syncEvsOverlay();
+});
+evsVideo.addEventListener("play",  () => { $("#evsPlayBtn").innerHTML = "⏸"; });
+evsVideo.addEventListener("pause", () => { $("#evsPlayBtn").innerHTML = "▶"; });
+
+$("#evsPlayBtn").addEventListener("click", () => {
+  if (evsVideo.paused) evsVideo.play(); else evsVideo.pause();
+});
+$("#evsSeekBar").addEventListener("input", () => {
+  evsVideo.currentTime = $("#evsSeekBar").value / 10;
+});
+
+function updateEvsTime() {
+  const cur = fmtTime(Math.floor(evsVideo.currentTime || 0));
+  const dur = isNaN(evsVideo.duration) ? "0:00" : fmtTime(Math.floor(evsVideo.duration));
+  $("#evsTimeLabel").textContent = `${cur} / ${dur}`;
+}
+
+// ── Subtitle overlay sync ─────────────────────────────────
+function syncEvsOverlay() {
+  const t = evsVideo.currentTime;
+  let activeIdx = -1;
+  for (let i = 0; i < editorSubs.segments.length; i++) {
+    if (t >= editorSubs.segments[i].start && t <= editorSubs.segments[i].end) {
+      activeIdx = i; break;
+    }
+  }
+  const previewEl = $("#evsPreviewText");
+  const seg = activeIdx >= 0 ? editorSubs.segments[activeIdx] : null;
+  previewEl.textContent = seg ? seg.text : "";
+
+  if (activeIdx !== editorSubs.activeIdx) {
+    editorSubs.activeIdx = activeIdx;
+    $$(".evs-seg-item").forEach((el, i) => el.classList.toggle("evs-seg-active", i === activeIdx));
+    if (activeIdx >= 0) {
+      const el = $(`.evs-seg-item[data-idx="${activeIdx}"]`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+}
+
+function updateEvsOverlayStyle() {
+  const text = $("#evsPreviewText");
+  const vid = $("#editorVideo");
+  const assSize = editorSubs.style.fontSize || 24;
+  const scale = vid.clientHeight && vid.videoHeight ? vid.clientHeight / vid.videoHeight : 1;
+  text.style.fontSize = (assSize * scale) + "px";
+  text.style.color = editorSubs.style.fontColor;
+  const handle = $("#evsDragHandle");
+  handle.style.maxWidth = "86%";
+  handle.style.top = (editorSubs.style.posY * 100) + "%";
+}
+
+// ── Overlay drag ──────────────────────────────────────────
+const evsDragHandle = $("#evsDragHandle");
+evsDragHandle.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  editorSubs.dragging = true;
+  evsDragHandle.style.cursor = "grabbing";
+});
+document.addEventListener("mousemove", (e) => {
+  if (!editorSubs.dragging) return;
+  const r = $("#evsVideoWrap").getBoundingClientRect();
+  editorSubs.style.posY = Math.max(0.05, Math.min(0.95, (e.clientY - r.top) / r.height));
+  evsDragHandle.style.top = (editorSubs.style.posY * 100) + "%";
+});
+document.addEventListener("mouseup", () => {
+  if (editorSubs.dragging) { editorSubs.dragging = false; evsDragHandle.style.cursor = "grab"; }
+});
+
+// ── Style controls ────────────────────────────────────────
+$("#evsFontSize").addEventListener("input", (e) => {
+  editorSubs.style.fontSize = parseInt(e.target.value);
+  updateEvsOverlayStyle();
+});
+$("#evsFontColor").addEventListener("input", (e) => {
+  editorSubs.style.fontColor = e.target.value;
+  updateEvsOverlayStyle();
+});
+$$(".evs-pos-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $$(".evs-pos-btn").forEach(b => b.classList.remove("sub-pos-active"));
+    btn.classList.add("sub-pos-active");
+    editorSubs.style.posY = parseFloat(btn.dataset.y);
+    $("#evsDragHandle").style.top = (editorSubs.style.posY * 100) + "%";
+  });
+});
+
+// ── Transcribe ────────────────────────────────────────────
+$("#btnEditorTranscribe").addEventListener("click", async () => {
+  if (!editorVideoPath) { toast("Load a video first", "error"); return; }
+  const btn = $("#btnEditorTranscribe");
+  btn.disabled = true;
+  btn.textContent = "Transcribiendo...";
+
+  try {
+    const result = await api("/api/subtitle/transcribe", {
+      path: editorVideoPath,
+      model: $("#evsModel").value,
+      language: "es",
+    });
+    if (result.error) { toast(result.error, "error"); btn.disabled = false; btn.textContent = "🎙️ Transcribe"; return; }
+
+    const poll = setInterval(async () => {
+      const job = await api("/api/job/" + result.job_id);
+      if (job.status === "done" && job.result) {
+        clearInterval(poll);
+        editorSubs.segments = job.result.segments;
+        renderEvsTranscript();
+        $("#btnEditorBurnSubs").disabled = false;
+        btn.disabled = false;
+        btn.textContent = "🎙️ Transcribe";
+        toast(`${editorSubs.segments.length} segments transcribed ✓`, "success");
+      } else if (job.status === "error") {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = "🎙️ Transcribe";
+        toast(job.error, "error");
+      } else {
+        btn.textContent = job.current || "Transcribiendo...";
+      }
+    }, 2000);
+  } catch (e) {
+    toast("Error: " + e.message, "error");
+    btn.disabled = false;
+    btn.textContent = "🎙️ Transcribe";
+  }
+});
+
+// ── Render transcript ─────────────────────────────────────
+function renderEvsTranscript() {
+  const list = $("#evsTranscript");
+  list.innerHTML = "";
+  editorSubs.segments.forEach((seg, i) => {
+    const div = document.createElement("div");
+    div.className = "evs-seg-item";
+    div.dataset.idx = i;
+    div.innerHTML = `
+      <span class="evs-seg-ts">${fmtTime(seg.start)}</span>
+      <span class="evs-seg-text" contenteditable="true" spellcheck="false">${seg.text}</span>
+    `;
+    div.querySelector(".evs-seg-ts").addEventListener("click", () => {
+      evsVideo.currentTime = seg.start;
+      evsVideo.pause();
+    });
+    const textEl = div.querySelector(".evs-seg-text");
+    textEl.addEventListener("input", () => {
+      editorSubs.segments[i].text = textEl.textContent.trim();
+      if (editorSubs.activeIdx === i) syncEvsOverlay();
+    });
+    textEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); textEl.blur(); }
+    });
+    list.appendChild(div);
+  });
+}
+
+// ── Burn subtitles ────────────────────────────────────────
+function hexToAssEvs(hex) {
+  const h = hex.replace("#", "");
+  return `&H00${h.slice(4,6)}${h.slice(2,4)}${h.slice(0,2)}`.toUpperCase();
+}
+
+$("#btnEditorBurnSubs").addEventListener("click", async () => {
+  if (!editorVideoPath || editorSubs.segments.length === 0) {
+    toast("Transcribe first", "error"); return;
+  }
+  const btn = $("#btnEditorBurnSubs");
+  btn.disabled = true;
+  btn.textContent = "Burning...";
+
+  try {
+    const result = await api("/api/subtitle/burn", {
+      path: editorVideoPath,
+      segments: editorSubs.segments,
+      style: {
+        font_size: editorSubs.style.fontSize,
+        position_y_pct: editorSubs.style.posY,
+        primary_color: hexToAssEvs(editorSubs.style.fontColor),
+        outline_color: "&H00000000",
+        outline_width: 2.5,
+        border_style: 1,
+      },
+    });
+
+    if (result.error) { toast(result.error, "error"); btn.disabled = false; btn.textContent = "📼 Burn Subtitles"; return; }
+
+    const poll = setInterval(async () => {
+      const job = await api("/api/job/" + result.job_id);
+      if (job.status === "done" && job.result) {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = "📼 Burn Subtitles";
+        toast(`Subtitles burned! → ${job.result.output.split("/").pop()}`, "success");
+      } else if (job.status === "error") {
+        clearInterval(poll);
+        btn.disabled = false;
+        btn.textContent = "📼 Burn Subtitles";
+        toast(job.error, "error");
+      } else {
+        btn.textContent = job.current || "Burning...";
+      }
+    }, 2000);
+  } catch (e) {
+    toast("Error: " + e.message, "error");
+    btn.disabled = false;
+    btn.textContent = "📼 Burn Subtitles";
+  }
 });
 
 // ── Smart Analyzer ───────────────────────────────────────
@@ -1258,6 +1800,246 @@ $("#btnDeps").addEventListener("click", async () => {
   const status = Object.entries(deps).map(([k, v]) => `${k}: ${v.ok ? "✓" : "✗"}`).join("  ");
   toast("Dependencies: " + status);
 });
+
+// ═══════════════════════════════════════════════════════════
+//  COMMAND PANEL — Natural language actions
+// ═══════════════════════════════════════════════════════════
+
+let cmdPollInterval = null;
+let processingHistory = [];  // [{action, label, filename, path}]
+let currentWorkingFile = null;  // {path, filename} currently in the editor player
+
+// Show panel when video is loaded
+function showCmdPanel() {
+  $("#cmdPanel").classList.remove("hidden");
+}
+
+// Hide panel when no video
+function hideCmdPanel() {
+  $("#cmdPanel").classList.add("hidden");
+}
+
+// ── Working video pipeline ────────────────────────────────
+function updateWorkingVideo(outputPath, filename, action, rawCmd) {
+  const actionLabels = {
+    enhance_audio: "🎙️ Voz mejorada",
+    remove_silence: "🔇 Silencios quitados",
+    change_speed: "⏩ Velocidad",
+    reverse: "🔄 Invertido",
+    trim_start: "✂️ Recorte inicio",
+    trim_end: "✂️ Recorte final",
+    cut_range: "✂️ Clip extraído",
+    burn_subtitles: "📼 Subtítulos",
+  };
+
+  // Update current working file
+  const fname = filename || outputPath.split("/").pop();
+  currentWorkingFile = { path: outputPath, filename: fname };
+
+  // Update the editor state so cut/analyze use the processed file
+  editorVideoPath = outputPath;
+  editorVideoFilename = fname;
+
+  // Reload video player
+  const vid = $("#editorVideo");
+  const wasPlaying = !vid.paused;
+  const currentTime = vid.currentTime;
+  vid.src = `/api/serve-output/${fname}?t=${Date.now()}`;
+  vid.load();
+  vid.addEventListener("loadedmetadata", function seek() {
+    vid.currentTime = Math.min(currentTime, vid.duration || 0);
+    if (wasPlaying) vid.play();
+    vid.removeEventListener("loadedmetadata", seek);
+  }, { once: false });
+
+  // Add to history
+  processingHistory.push({
+    action,
+    label: actionLabels[action] || action,
+    rawCmd,
+    filename: fname,
+    path: outputPath,
+  });
+  renderProcessingHistory();
+
+  // Clear editor clips and thumbnails since video changed
+  state.editorClips = [];
+  renderEditorClips();
+  state.editorInfo = null;
+  editorSubs.segments = [];
+  $("#evsTranscript").innerHTML = '<div class="empty-hint">Click <strong>🎙️ Transcribe</strong> to generate subtitles</div>';
+  $("#btnEditorBurnSubs").disabled = true;
+  $("#editorTimeline").innerHTML = '<div class="placeholder-msg"><div class="placeholder-icon">🖼️</div><p>Click <strong>Generate Thumbnails</strong> to update</p></div>';
+}
+
+function renderProcessingHistory() {
+  let container = $("#processingStack");
+  if (!container) {
+    // Create it if it doesn't exist
+    const panel = $("#cmdPanel");
+    container = document.createElement("div");
+    container.id = "processingStack";
+    container.className = "processing-stack";
+    container.innerHTML = '<div class="proc-title">📋 Pipeline de procesamiento</div><div class="proc-list" id="procList"></div><button class="btn btn-accent btn-full" id="btnExportFinal" style="margin-top:8px">💾 Exportar video final</button>';
+    panel.appendChild(container);
+
+    $("#btnExportFinal").addEventListener("click", exportFinalVideo);
+  }
+
+  const list = $("#procList");
+  list.innerHTML = processingHistory.map((h, i) => `
+    <div class="proc-item">
+      <span class="proc-step">${i + 1}</span>
+      <span class="proc-label">${h.label}</span>
+      <span class="proc-cmd">"${h.rawCmd}"</span>
+    </div>
+  `).join("");
+
+  $("#btnExportFinal").disabled = processingHistory.length === 0;
+}
+
+async function exportFinalVideo() {
+  if (!currentWorkingFile) { toast("Nothing to export", "error"); return; }
+
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const result = await api("/api/local/export", {
+      path: currentWorkingFile.path,
+      label: `final_${timestamp}`,
+    });
+    if (result.ok) {
+      toast(`Exportado: ${result.filename} ✓`, "success");
+      $("#cmdResult").classList.remove("hidden");
+      $("#cmdResult").classList.add("success");
+      $("#cmdResult").innerHTML = `
+        <div class="cmd-msg">✅ Video final exportado</div>
+        <div class="cmd-detail">📁 ${result.filename}</div>
+        <div class="cmd-detail">📦 ${fmtSize(result.size_mb)}</div>
+        <div class="cmd-detail" style="font-size:10px;opacity:0.7">📂 ~/Desktop/yt-clipper-output/</div>
+        <button class="btn btn-sm" style="margin-top:6px" onclick="fetch('/api/open-output',{method:'POST'})">📂 Abrir carpeta de output</button>
+      `;
+    }
+  } catch (e) {
+    toast("Error: " + e.message, "error");
+  }
+}
+
+$("#btnCmdRun").addEventListener("click", runCommand);
+$("#cmdInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runCommand();
+});
+
+// Chip clicks
+$$(".cmd-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    $("#cmdInput").value = chip.dataset.cmd;
+    runCommand();
+  });
+});
+
+async function runCommand() {
+  const input = $("#cmdInput");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!editorVideoPath) {
+    toast("Load a video in the Editor tab first", "error");
+    return;
+  }
+
+  const btn = $("#btnCmdRun");
+  const resultDiv = $("#cmdResult");
+
+  btn.disabled = true;
+  btn.textContent = "...";
+  resultDiv.classList.remove("hidden", "success", "error");
+  resultDiv.innerHTML = `<span style="color:var(--accent)">⏳ Procesando: "${text}"</span>`;
+
+  try {
+    const result = await api("/api/cmd/run", {
+      text,
+      path: editorVideoPath,
+    });
+
+    if (result.error) {
+      resultDiv.classList.add("error");
+      resultDiv.innerHTML = `<span style="color:var(--red)">❌ ${result.error}</span>`;
+      btn.disabled = false;
+      btn.textContent = "Ejecutar";
+      return;
+    }
+
+    // Poll for job completion
+    if (cmdPollInterval) clearInterval(cmdPollInterval);
+    const jobId = result.job_id;
+    const parsed = result.parsed;
+
+    cmdPollInterval = setInterval(async () => {
+      const job = await api("/api/job/" + jobId);
+      if (job.status === "done" && job.result) {
+        clearInterval(cmdPollInterval);
+        cmdPollInterval = null;
+        btn.disabled = false;
+        btn.textContent = "Ejecutar";
+
+        const r = job.result;
+        if (r.ok) {
+          resultDiv.classList.add("success");
+          let html = `<div class="cmd-msg">✅ ${r.message || "Completado"}</div>`;
+          if (r.output) {
+            html += `<div class="cmd-detail">📁 ${r.filename || r.output.split("/").pop()}</div>`;
+            html += `<div class="cmd-detail">📦 ${r.size_mb ? fmtSize(r.size_mb) : "—"}</div>`;
+
+            // 🔄 Update editor to use processed file
+            updateWorkingVideo(r.output, r.filename, parsed.action, text);
+            html += `<div class="cmd-detail" style="color:var(--accent);margin-top:4px">🔄 Video actualizado en el editor</div>`;
+          }
+          if (r.size_mb) {
+            html += `<div class="cmd-detail">📦 ${fmtSize(r.size_mb)}</div>`;
+          }
+          if (r.new_duration) {
+            html += `<div class="cmd-detail">⏱ Original: ${fmtTime(r.original_duration)} → Ahora: ${fmtTime(r.new_duration)}</div>`;
+          }
+          if (r.preview) {
+            html += `<div class="cmd-detail" style="margin-top:6px;white-space:pre-wrap;line-height:1.4">${r.preview}</div>`;
+          }
+          if (r.clips) {
+            r.clips.forEach((c, i) => {
+              html += `<div class="cmd-clip">
+                <span class="cmd-clip-rank">#${i + 1}</span>
+                <span class="cmd-clip-time">${fmtTime(c.start)} → ${fmtTime(c.end)}</span>
+                <span class="cmd-clip-score">⭐ ${c.engagement}</span>
+              </div>`;
+            });
+          }
+          if (r.details && r.details.length) {
+            html += `<div style="margin-top:6px;line-height:1.6">${r.details.map(d => `<div style="font-size:11px;color:var(--text-muted)">${d}</div>`).join("")}</div>`;
+          }
+          resultDiv.innerHTML = html;
+          toast(r.message || "Done!", "success");
+          // Clear input on success
+          input.value = "";
+        } else {
+          resultDiv.classList.add("error");
+          resultDiv.innerHTML = `<div class="cmd-msg">❌ ${r.error || "Failed"}</div>`;
+        }
+      } else if (job.status === "error") {
+        clearInterval(cmdPollInterval);
+        cmdPollInterval = null;
+        btn.disabled = false;
+        btn.textContent = "Ejecutar";
+        resultDiv.classList.add("error");
+        resultDiv.innerHTML = `<div class="cmd-msg">❌ ${job.error}</div>`;
+      } else if (job.status === "running") {
+        resultDiv.innerHTML = `<span style="color:var(--accent)">⏳ ${job.current || "Procesando..."}</span>`;
+      }
+    }, 1500);
+  } catch (e) {
+    resultDiv.classList.add("error");
+    resultDiv.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+    btn.disabled = false;
+    btn.textContent = "Ejecutar";
+  }
+}
 
 // ── Init ─────────────────────────────────────────────────
 console.log("YT Clipper ready ✂️ | YouTube · Subtitles · Editor");
