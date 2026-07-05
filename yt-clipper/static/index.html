@@ -130,6 +130,13 @@
     <!-- Info bar -->
     <div class="editor-infobar">
       <div class="editor-infobar-meta" id="editorInfo"></div>
+      <div class="format-selector" id="formatSelector">
+        <button class="fmt-btn fmt-btn-active" data-format="9:16" title="TikTok / Reels / Shorts">📱 9:16</button>
+        <button class="fmt-btn" data-format="16:9" title="YouTube / Landscape">🖥 16:9</button>
+        <button class="fmt-btn" data-format="1:1" title="Instagram / Square">⬛ 1:1</button>
+        <button class="fmt-btn" data-format="4:5" title="Instagram Portrait">🖼 4:5</button>
+        <button class="fmt-btn" data-format="free" title="No format constraint">⬜ Free</button>
+      </div>
       <div class="editor-infobar-actions">
         <button class="btn btn-sm btn-ghost" id="btnAddMoreVideos">＋ Add Video</button>
         <button class="btn btn-sm btn-ghost" id="btnClearEditor">✕ Close All</button>
@@ -146,7 +153,10 @@
         <div class="sidebar-block">
           <div class="sidebar-block-title">
             🎬 Videos
-            <span class="badge-count" id="editorVideoCount">0</span>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span class="badge-count" id="editorVideoCount">0</span>
+              <button id="btnAddVideoSidebar" title="Add video" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:14px;line-height:1;padding:0 2px">＋</button>
+            </div>
           </div>
           <div id="editorVideoList" class="video-list-sidebar">
             <div class="empty-hint-sm">No videos loaded</div>
@@ -185,10 +195,12 @@
       <div class="editor-center">
 
         <div class="editor-video-wrap" id="evsVideoWrap">
-          <video id="editorVideo" playsinline preload="metadata"></video>
-          <div class="sub-overlay">
-            <div class="sub-drag-handle" id="evsDragHandle">
-              <span id="evsPreviewText"></span>
+          <div class="canvas-frame" id="canvasFrame">
+            <video id="editorVideo" playsinline preload="metadata"></video>
+            <div class="sub-overlay">
+              <div class="sub-drag-handle" id="evsDragHandle">
+                <span id="evsPreviewText"></span>
+              </div>
             </div>
           </div>
         </div>
@@ -345,6 +357,7 @@
             <option value="60">1min</option>
           </select>
           <button class="btn btn-sm" id="btnGenThumbs">🖼️ Thumbnails</button>
+          <button class="btn btn-sm" id="btnSplitClip" title="Split clip at playhead position">✂ Split</button>
           <span class="hint-text hidden" id="editorThumbStatus"></span>
         </div>
         <div class="tl-selection hidden" id="editorSelection">

@@ -1092,17 +1092,25 @@ def _cmd_enhance_audio(video_path: str, timestamp: str, job_id: str) -> dict:
 
     outfile = OUTPUT_DIR / f"{timestamp}_voz_mejorada.mp4"
 
-    # Professional voice enhancement chain (v2 — warm, natural):
-    # 1. highpass=80    → cut sub-bass rumble (<80Hz)
-    # 2. afftdn=nr=12   → gentle FFT noise reduction (default strength, avoids metallic artifacts)
-    # 3. acompressor    → downward compression (controls peaks without inflating background noise)
-    # 4. loudnorm       → EBU R128 broadcast standard (-16 LUFS for YouTube)
-    # 5. aresample=48k  → loudnorm internally upsamples to 192kHz, resample back to avoid AAC glitches
+    # Professional voice enhancement chain (v3 — immersive/broadcast):
+    # 1. highpass=f=80      → cut sub-bass rumble (<80Hz)
+    # 2. afftdn=nr=15       → FFT noise reduction (slightly stronger than v2)
+    # 3. EQ warmth +3dB @200Hz  → body/fullness — makes voice feel "close"
+    # 4. EQ cut -2dB @500Hz     → reduce boxy/nasal muddiness
+    # 5. EQ presence +4dB @3500Hz → clarity, punch, cuts through music/noise
+    # 6. EQ air +2dB @10kHz     → openness, breathiness, "enveloping" quality
+    # 7. acompressor        → tighter ratio + faster attack for punchy, controlled dynamics
+    # 8. loudnorm           → EBU R128 at -14 LUFS (louder/punchier than -16 for YouTube)
+    # 9. aresample=48k      → loudnorm internally upsamples to 192kHz, resample back to avoid AAC glitches
     audio_filter = (
         "highpass=f=80,"
-        "afftdn=nr=12:nf=-25,"
-        "acompressor=threshold=-18dB:ratio=3:attack=10:release=150:makeup=4,"
-        "loudnorm=I=-16:LRA=11:TP=-1.5,"
+        "afftdn=nr=15:nf=-25,"
+        "equalizer=f=200:t=o:w=1:g=3,"
+        "equalizer=f=500:t=o:w=1:g=-2,"
+        "equalizer=f=3500:t=o:w=1.5:g=4,"
+        "equalizer=f=10000:t=o:w=2:g=2,"
+        "acompressor=threshold=-20dB:ratio=4:attack=5:release=80:makeup=6,"
+        "loudnorm=I=-14:LRA=9:TP=-1.5,"
         "aresample=48000"
     )
 
@@ -1125,8 +1133,12 @@ def _cmd_enhance_audio(video_path: str, timestamp: str, job_id: str) -> dict:
 
         audio_filter_fallback = (
             "highpass=f=80,"
-            "acompressor=threshold=-18dB:ratio=3:attack=10:release=150:makeup=4,"
-            "loudnorm=I=-16:LRA=11:TP=-1.5,"
+            "equalizer=f=200:t=o:w=1:g=3,"
+            "equalizer=f=500:t=o:w=1:g=-2,"
+            "equalizer=f=3500:t=o:w=1.5:g=4,"
+            "equalizer=f=10000:t=o:w=2:g=2,"
+            "acompressor=threshold=-20dB:ratio=4:attack=5:release=80:makeup=6,"
+            "loudnorm=I=-14:LRA=9:TP=-1.5,"
             "aresample=48000"
         )
         rc, stdout, stderr = run([
@@ -1175,9 +1187,18 @@ def _get_duration(path: str) -> float:
 
 @app.route("/api/export/concat", methods=["POST"])
 def export_concat():
-    """Concatenate multiple videos in order. Each video can have trim + subtitles."""
+    """Concatenate multiple videos in order, then composite any overlay clips."""
     data = request.get_json()
     videos = data.get("videos", [])  # [{path, trimStart?, trimEnd?, subtitles?: {segments, style}}]
+    overlays = data.get("overlays", [])  # [{path, trimStart, trimEnd, timelineStart, timelineEnd, x_pct, y_pct, width_pct, audioEnabled}]
+    output_format = data.get("output_format")  # "9:16" | "16:9" | "1:1" | "4:5" | None
+
+    FORMAT_TARGETS = {
+        "9:16": (1080, 1920),
+        "16:9": (1920, 1080),
+        "1:1":  (1080, 1080),
+        "4:5":  (1080, 1350),
+    }
 
     if not videos or len(videos) < 1:
         return jsonify({"error": "At least one video required"}), 400
@@ -1261,6 +1282,103 @@ def export_concat():
 
             if rc != 0:
                 raise RuntimeError(f"Concatenation failed: {stderr[-300:]}")
+
+            # ── Apply overlay clips if any ───────────────────────
+            if overlays:
+                with jobs_lock:
+                    jobs[job_id]["current"] = "Compositing overlay tracks..."
+
+                # Probe main video dimensions
+                probe_rc, probe_out, _ = run([
+                    "ffprobe", "-v", "error", "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height",
+                    "-of", "csv=s=x:p=0", str(outfile)
+                ], timeout=30)
+                dims = probe_out.strip().split("x") if probe_rc == 0 and "x" in probe_out else ["1920", "1080"]
+                main_w = int(dims[0]) if dims[0].isdigit() else 1920
+                main_h = int(dims[1]) if len(dims) > 1 and dims[1].isdigit() else 1080
+
+                # Build ffmpeg overlay filter chain
+                inputs = ["-i", str(outfile)]
+                filter_parts = []
+                audio_inputs = ["[0:a]"]
+
+                for i, ov in enumerate(overlays):
+                    ov_path = ov.get("path", "")
+                    if not ov_path or not Path(ov_path).exists():
+                        continue
+                    inputs += ["-i", ov_path]
+                    in_idx = i + 1
+                    x_px = int(main_w * ov.get("x_pct", 55) / 100)
+                    y_px = int(main_h * ov.get("y_pct", 5) / 100)
+                    w_px = int(main_w * ov.get("width_pct", 38) / 100)
+                    ts = ov.get("timelineStart", 0)
+                    te = ov.get("timelineEnd", 999)
+                    trim_s = ov.get("trimStart", 0)
+                    enable = f"between(t,{ts},{te})"
+                    # Scale overlay and shift its PTS to match timeline position
+                    filter_parts.append(
+                        f"[{in_idx}:v]trim=start={trim_s},setpts=PTS-STARTPTS+{ts}/TB,scale={w_px}:-1[ov{i}]"
+                    )
+                    prev = f"[v{i-1}]" if i > 0 else "[0:v]"
+                    filter_parts.append(
+                        f"{prev}[ov{i}]overlay={x_px}:{y_px}:enable='{enable}'[v{i}]"
+                    )
+                    if ov.get("audioEnabled"):
+                        audio_inputs.append(f"[{in_idx}:a]")
+
+                if filter_parts:
+                    final_v = f"[v{len(overlays)-1}]"
+                    filter_complex = ";".join(filter_parts)
+                    if len(audio_inputs) > 1:
+                        filter_complex += f";{''.join(audio_inputs)}amix=inputs={len(audio_inputs)}:duration=first[aout]"
+                        a_map = ["-map", "[aout]"]
+                    else:
+                        a_map = ["-map", "0:a?"]
+
+                    overlaid = OUTPUT_DIR / f"{timestamp}_export_final_ov.mp4"
+                    rc2, _, stderr2 = run([
+                        "ffmpeg", "-y",
+                        *inputs,
+                        "-filter_complex", filter_complex,
+                        "-map", final_v,
+                        *a_map,
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                        "-c:a", "aac", "-b:a", "192k",
+                        str(overlaid)
+                    ], timeout=900)
+                    if rc2 == 0 and overlaid.exists():
+                        outfile = overlaid
+                    else:
+                        # Overlay failed — keep base concatenation, warn in result
+                        pass
+
+            # ── Apply output format (crop + scale to target aspect ratio) ──
+            if output_format and output_format in FORMAT_TARGETS:
+                tw, th = FORMAT_TARGETS[output_format]
+                with jobs_lock:
+                    jobs[job_id]["current"] = f"Encoding to {output_format} ({tw}x{th})..."
+
+                fmt_output = OUTPUT_DIR / f"{timestamp}_export_final_fmt.mp4"
+                # scale-to-fill then crop: always fills the frame, never adds bars
+                vf = (
+                    f"scale={tw}:{th}:force_original_aspect_ratio=increase,"
+                    f"crop={tw}:{th},"
+                    f"format=yuv420p"
+                )
+                rc_fmt, _, stderr_fmt = run([
+                    "ffmpeg", "-y", "-i", str(outfile),
+                    "-vf", vf,
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                    "-c:a", "aac", "-b:a", "192k",
+                    str(fmt_output)
+                ], timeout=900)
+                if rc_fmt == 0 and fmt_output.exists():
+                    # Remove the intermediate file if it's not the original concat
+                    if outfile != OUTPUT_DIR / f"{timestamp}_export_final.mp4":
+                        try: outfile.unlink()
+                        except Exception: pass
+                    outfile = fmt_output
 
             size_mb = outfile.stat().st_size / (1024 * 1024)
 

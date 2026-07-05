@@ -468,6 +468,107 @@ let editorVideos = [];        // [{id, path, filename, info, order, subtitles: {
 let activeVideoId = null;     // currently displayed video
 let editorVideoCounter = 0;
 
+// Timeline clips — the sequenced clip list (CapCut-style single track)
+// Each clip: {id, videoId, path, filename, info, trimStart, trimEnd, subtitles, playerSrc?}
+let timelineClips = [];
+let activeClipId = null;
+let clipCounter = 0;
+
+function getActiveClip() {
+  return timelineClips.find(c => c.id === activeClipId) || null;
+}
+function getTotalDuration() {
+  return timelineClips.reduce((s, c) => s + (c.trimEnd - c.trimStart), 0);
+}
+
+// ── Overlay clips — PiP layers composited on top of main track ──
+let overlayClips = [];
+let overlayCounter = 0;
+
+// ── Output format / canvas aspect ratio ──────────────────────────
+const FORMAT_PRESETS = {
+  "9:16":  { label: "TikTok / Reels / Shorts", ratio: 9 / 16, ffTarget: [1080, 1920] },
+  "16:9":  { label: "YouTube / Landscape",      ratio: 16 / 9, ffTarget: [1920, 1080] },
+  "1:1":   { label: "Instagram / Square",        ratio: 1,      ffTarget: [1080, 1080] },
+  "4:5":   { label: "Instagram Portrait",        ratio: 4 / 5,  ffTarget: [1080, 1350] },
+  "free":  { label: "No constraint",             ratio: null,   ffTarget: null },
+};
+let activeFormat = "9:16";
+
+function setCanvasFormat(fmt) {
+  activeFormat = fmt;
+  const preset = FORMAT_PRESETS[fmt] || FORMAT_PRESETS["free"];
+  const frame = $("#canvasFrame");
+  if (frame) {
+    if (preset.ratio) {
+      frame.style.aspectRatio = String(preset.ratio);
+      frame.style.height = "100%";
+      frame.style.width = "";
+    } else {
+      frame.style.aspectRatio = "";
+      frame.style.height = "100%";
+      frame.style.width = "100%";
+    }
+  }
+  document.querySelectorAll(".fmt-btn").forEach(b => {
+    b.classList.toggle("fmt-btn-active", b.dataset.format === fmt);
+  });
+}
+
+function addAsOverlay(videoId) {
+  const v = editorVideos.find(v => v.id === videoId);
+  if (!v) return;
+  if (overlayClips.find(o => o.videoId === videoId)) {
+    toast("Already an overlay", "warn"); return;
+  }
+  // Remove from main track
+  timelineClips = timelineClips.filter(c => c.videoId !== videoId);
+  if (!timelineClips.find(c => c.id === activeClipId)) {
+    activeClipId = timelineClips[0]?.id || null;
+  }
+  overlayCounter++;
+  const ov = {
+    id: `ov_${overlayCounter}`,
+    videoId,
+    path: v.path,
+    filename: v.filename,
+    info: v.info,
+    playerSrc: v.playerSrc,
+    trimStart: 0,
+    trimEnd: v.info.duration,
+    timelineStart: 0,
+    timelineEnd: v.info.duration,
+    x: 55, y: 5, width: 38,   // % of canvas
+    audioEnabled: false,
+    zIndex: 10 + overlayCounter,
+  };
+  v.isOverlay = true;
+  overlayClips.push(ov);
+  renderVideoList();
+  renderSingleTrackTimeline();
+  renderCanvasOverlays();
+  toast(`${v.filename} → overlay`, "success");
+}
+
+function removeFromOverlay(ovId) {
+  const ov = overlayClips.find(o => o.id === ovId);
+  if (!ov) return;
+  const v = editorVideos.find(v => v.id === ov.videoId);
+  if (v) {
+    v.isOverlay = false;
+    clipCounter++;
+    timelineClips.push({
+      id: `clip_${clipCounter}`, videoId: v.id,
+      path: v.path, filename: v.filename, info: v.info,
+      trimStart: 0, trimEnd: v.info.duration, subtitles: v.subtitles,
+    });
+  }
+  overlayClips = overlayClips.filter(o => o.id !== ovId);
+  document.getElementById(`ovwrap_${ovId}`)?.remove();
+  renderVideoList();
+  renderSingleTrackTimeline();
+}
+
 function getActiveVideo() {
   return editorVideos.find(v => v.id === activeVideoId) || null;
 }
@@ -557,6 +658,10 @@ editorFileInput.addEventListener("change", async () => {
 $("#btnAddMoreVideos").addEventListener("click", () => {
   $("#editorFileInput2").click();
 });
+// "+" button in sidebar VIDEOS section
+$("#btnAddVideoSidebar").addEventListener("click", () => {
+  $("#editorFileInput2").click();
+});
 $("#editorFileInput2").addEventListener("change", async () => {
   const files = $("#editorFileInput2").files;
   if (files.length > 0) {
@@ -620,6 +725,21 @@ async function addVideoToEditor(path, filename) {
 
     editorVideos.push(video);
 
+    // Create a corresponding timeline clip covering the full video
+    clipCounter++;
+    const clip = {
+      id: `clip_${clipCounter}`,
+      videoId: video.id,
+      path: video.path,
+      filename: video.filename,
+      info,
+      trimStart: 0,
+      trimEnd: info.duration,
+      subtitles: video.subtitles,
+    };
+    timelineClips.push(clip);
+    if (!activeClipId) activeClipId = clip.id;
+
     // First video added — open workspace
     if (editorVideos.length === 1) {
       activeVideoId = video.id;
@@ -630,7 +750,7 @@ async function addVideoToEditor(path, filename) {
     }
 
     renderVideoList();
-    renderMultiTrackTimeline();
+    renderSingleTrackTimeline();
     updateEditorInfoBar();
     resetEditorDropZoneText();
   } catch (e) {
@@ -644,6 +764,42 @@ async function addMultipleVideos(files) {
   }
 }
 
+function selectClip(clipId) {
+  const clip = timelineClips.find(c => c.id === clipId);
+  if (!clip) return;
+  activeClipId = clipId;
+  activeVideoId = clip.videoId;
+  state.editorInfo = clip.info;
+
+  const vid = $("#editorVideo");
+  const src = clip.playerSrc || `/api/uploads/${clip.filename}`;
+  if (!vid.src.endsWith(clip.filename) && !vid.currentSrc.includes(clip.filename)) {
+    vid.src = src;
+    vid.load();
+  }
+  vid.addEventListener("loadedmetadata", () => {
+    vid.currentTime = clip.trimStart;
+  }, { once: true });
+
+  renderSingleTrackTimeline();
+  renderVideoList();
+  updateEditorInfoBar();
+
+  // Restore subtitle state
+  const subs = clip.subtitles;
+  if (subs.transcribed) {
+    renderEvsTranscript();
+    $("#btnEditorBurnSubs").disabled = false;
+    $("#evsSegCount").textContent = subs.segments.length;
+  } else {
+    $("#evsTranscript").innerHTML = '<div class="empty-hint-sm">Transcribe to see segments</div>';
+    $("#btnEditorBurnSubs").disabled = true;
+    $("#evsSegCount").textContent = "0";
+  }
+  $("#evsKaraokeToggle").checked = subs.karaoke;
+  $("#evsHighlightRow").classList.toggle("hidden", !subs.karaoke);
+}
+
 function selectVideo(videoId) {
   if (activeVideoId === videoId) return;
   activeVideoId = videoId;
@@ -655,7 +811,7 @@ function selectVideo(videoId) {
 
   loadActiveVideoIntoPlayer();
   renderVideoList();
-  renderMultiTrackTimeline();
+  renderSingleTrackTimeline();
   updateEditorInfoBar();
 
   // Restore subtitle state for this video
@@ -685,7 +841,9 @@ function loadActiveVideoIntoPlayer() {
   const v = getActiveVideo();
   if (!v) return;
   const vid = $("#editorVideo");
-  vid.src = `/api/uploads/${v.filename}`;
+  // v.playerSrc is set by updateWorkingVideo when a processed file is created in output dir.
+  // Falls back to uploads for the original uploaded file.
+  vid.src = v.playerSrc || `/api/uploads/${v.filename}`;
   vid.load();
 }
 
@@ -700,18 +858,25 @@ function removeVideo(videoId) {
   if (idx < 0) return;
 
   editorVideos.splice(idx, 1);
-
-  // Re-index order
   editorVideos.forEach((v, i) => { v.order = i; });
 
-  // If removed active, select first
+  // Remove all timeline clips from this video
+  timelineClips = timelineClips.filter(c => c.videoId !== videoId);
+  if (!timelineClips.find(c => c.id === activeClipId)) {
+    activeClipId = timelineClips[0]?.id || null;
+  }
+
+  // If removed active video, switch to first remaining
   if (activeVideoId === videoId) {
-    activeVideoId = editorVideos[0].id;
-    loadActiveVideoIntoPlayer();
+    const firstClip = getActiveClip();
+    if (firstClip) {
+      activeVideoId = firstClip.videoId;
+      loadActiveVideoIntoPlayer();
+    }
   }
 
   renderVideoList();
-  renderMultiTrackTimeline();
+  renderSingleTrackTimeline();
   updateEditorInfoBar();
 }
 
@@ -719,6 +884,12 @@ function clearAllVideos() {
   editorVideos = [];
   activeVideoId = null;
   editorVideoCounter = 0;
+  timelineClips = [];
+  activeClipId = null;
+  clipCounter = 0;
+  overlayClips = [];
+  overlayCounter = 0;
+  $("#canvasFrame").querySelectorAll(".canvas-overlay").forEach(el => el.remove());
   currentWorkingFile = null;
   processingHistory = [];
   state.editorClips = [];
@@ -753,7 +924,7 @@ function updateEditorInfoBar() {
   `;
   // Enable export button when videos are loaded
   const exportBtn = $("#btnExportFinal");
-  if (exportBtn) exportBtn.disabled = editorVideos.length === 0;
+  if (exportBtn) exportBtn.disabled = timelineClips.length === 0;
 }
 
 function renderVideoList() {
@@ -770,14 +941,18 @@ function renderVideoList() {
     const subsBadge = subs.transcribed
       ? `<span class="video-sb-subs-badge">💬${subs.segments.length}</span>`
       : "";
+    const isOv = !!v.isOverlay;
     return `
-      <div class="video-sidebar-item${v.id === activeVideoId ? ' active' : ''}"
+      <div class="video-sidebar-item${v.id === activeVideoId ? ' active' : ''}${isOv ? ' is-overlay' : ''}"
            data-vid="${v.id}" data-idx="${i}">
         <span class="video-sb-drag" data-vid="${v.id}">⋮⋮</span>
         <span class="video-sb-num">${i + 1}</span>
         <span class="video-sb-name">${v.filename}</span>
         ${subsBadge}
         <span class="video-sb-dur">${fmtTime(v.info.duration)}</span>
+        <button class="video-sb-ov-btn${isOv ? ' active' : ''}" data-vid="${v.id}"
+                title="${isOv ? 'Move back to main track' : 'Use as overlay layer'}"
+        >${isOv ? '↙' : '↗'}</button>
         <span class="video-sb-remove" data-vid="${v.id}">×</span>
       </div>`;
   }).join("");
@@ -785,8 +960,26 @@ function renderVideoList() {
   // Click to select
   container.querySelectorAll(".video-sidebar-item").forEach(el => {
     el.addEventListener("click", (e) => {
-      if (e.target.classList.contains("video-sb-remove") || e.target.classList.contains("video-sb-drag")) return;
+      if (e.target.classList.contains("video-sb-remove") ||
+          e.target.classList.contains("video-sb-drag") ||
+          e.target.classList.contains("video-sb-ov-btn")) return;
       selectVideo(el.dataset.vid);
+    });
+  });
+
+  // Overlay toggle button
+  container.querySelectorAll(".video-sb-ov-btn").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const vid = el.dataset.vid;
+      const v = editorVideos.find(v => v.id === vid);
+      if (!v) return;
+      if (v.isOverlay) {
+        const ovId = overlayClips.find(o => o.videoId === vid)?.id;
+        if (ovId) removeFromOverlay(ovId);
+      } else {
+        addAsOverlay(vid);
+      }
     });
   });
 
@@ -803,208 +996,462 @@ function renderVideoList() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  MULTI-TRACK TIMELINE — stacked lanes with subtitle blocks
+//  SINGLE-TRACK TIMELINE — horizontal clips (CapCut style)
 // ═══════════════════════════════════════════════════════════
 
-function renderMultiTrackTimeline() {
+function renderSingleTrackTimeline() {
   const container = $("#timelineMultiTrack");
   if (!container) return;
 
-  if (editorVideos.length === 0) {
+  if (timelineClips.length === 0) {
     container.innerHTML = '<div class="tl-mt-placeholder">Add videos to see them on the timeline</div>';
     return;
   }
 
-  // Find the longest video for timeline scale
-  let maxDuration = 1;
-  editorVideos.forEach(v => {
-    if (v.info.duration > maxDuration) maxDuration = v.info.duration;
-  });
+  const totalDur = Math.max(getTotalDuration(), 0.01);
 
-  // Update duration for ruler/playhead reference (preserve path and other fields)
+  // Update state.editorInfo.duration for ruler
   if (!state.editorInfo) state.editorInfo = {};
-  if (!state.editorInfo.duration || state.editorInfo.duration < maxDuration) {
-    state.editorInfo.duration = maxDuration;
+  state.editorInfo.duration = totalDur;
+
+  let html = '<div class="tl-st-row">';
+  timelineClips.forEach((clip, i) => {
+    const dur = clip.trimEnd - clip.trimStart;
+    const flexVal = Math.max(dur / totalDur, 0.01);
+    const isActive = clip.id === activeClipId;
+    const hasSubs = clip.subtitles?.transcribed;
+    html += `
+      <div class="tl-clip${isActive ? ' active' : ''}"
+           data-clipid="${clip.id}" data-idx="${i}"
+           style="flex:${flexVal}">
+        <div class="tl-clip-trim left" data-clipid="${clip.id}" data-edge="left"></div>
+        <div class="tl-clip-inner">
+          <span class="tl-clip-num">${i + 1}</span>
+          <span class="tl-clip-name">${clip.filename}</span>
+          ${hasSubs ? `<span class="tl-clip-subs-dot" title="Has subtitles">💬</span>` : ""}
+          <span class="tl-clip-dur">${fmtTime(dur)}</span>
+        </div>
+        <div class="tl-clip-trim right" data-clipid="${clip.id}" data-edge="right"></div>
+      </div>`;
+  });
+  html += '<div class="tl-st-playhead" id="tlStPlayhead"></div>';
+  html += '</div>';
+
+  // Overlay tracks (one row per overlay, positioned absolutely by timelineStart)
+  if (overlayClips.length > 0) {
+    const maxDur = Math.max(totalDur, ...overlayClips.map(o => o.timelineEnd));
+    html += '<div class="tl-ov-tracks">';
+    overlayClips.forEach((ov, i) => {
+      const ovDur = ov.timelineEnd - ov.timelineStart;
+      const leftPct = (ov.timelineStart / maxDur) * 100;
+      const widthPct = (ovDur / maxDur) * 100;
+      html += `
+        <div class="tl-ov-row">
+          <div class="tl-ov-block" data-ovid="${ov.id}"
+               style="left:${leftPct}%;width:${widthPct}%">
+            <div class="tl-ov-handle-slide left" data-ovid="${ov.id}" data-edge="left"></div>
+            <span class="tl-ov-label">↗ ${ov.filename}</span>
+            <span class="tl-ov-dur">${fmtTime(ovDur)}</span>
+            <div class="tl-ov-handle-slide right" data-ovid="${ov.id}" data-edge="right"></div>
+          </div>
+        </div>`;
+    });
+    html += '</div>';
   }
 
-  container.innerHTML = editorVideos.map((v, i) => {
-    const isActive = v.id === activeVideoId;
-    const subs = v.subtitles;
-    const dur = v.info.duration;
-    const trim = getVideoTrim(v);
-    const hasTrim = trim.start > 0 || trim.end < dur;
+  container.innerHTML = html;
 
-    // Video block position with trim
-    const blockLeftPct = (trim.start / maxDuration) * 100;
-    const blockWidthPct = ((trim.end - trim.start) / maxDuration) * 100;
-
-    // Build subtitle blocks HTML (only within trimmed range)
-    let subBlocksHTML = "";
-    if (subs.transcribed && subs.segments.length > 0) {
-      subBlocksHTML = subs.segments
-        .filter(seg => seg.end > trim.start && seg.start < trim.end)
-        .map(seg => {
-          const segStart = Math.max(seg.start, trim.start);
-          const segEnd = Math.min(seg.end, trim.end);
-          const leftPct = (segStart / maxDuration) * 100;
-          const widthPct = Math.max(((segEnd - segStart) / maxDuration) * 100, 0.3);
-          return `<div class="tl-mt-sub-block" style="left:${leftPct}%;width:${widthPct}%"></div>`;
-        }).join("");
-    }
-
-    // Trim indicators — dimmed areas before/after trim
-    const preTrimHTML = trim.start > 0
-      ? `<div class="tl-mt-trim-zone" style="left:0%;width:${blockLeftPct}%" title="Trimmed start: ${fmtTime(trim.start)}"></div>`
-      : "";
-    const postTrimHTML = trim.end < dur
-      ? `<div class="tl-mt-trim-zone" style="left:${blockLeftPct + blockWidthPct}%;width:${100 - blockLeftPct - blockWidthPct}%" title="Trimmed end: ${fmtTime(dur - trim.end)}"></div>`
-      : "";
-
-    return `
-      <div class="tl-mt-lane${isActive ? ' active' : ''}" data-vid="${v.id}" data-idx="${i}"
-           draggable="false">
-        <div class="tl-mt-lane-handle" data-vid="${v.id}" title="Drag to reorder">⋮⋮</div>
-        <div class="tl-mt-lane-label">
-          <span class="lane-num">${i + 1}</span>${v.filename}
-          ${hasTrim ? `<span style="font-size:9px;color:var(--yellow);margin-left:4px">✂️</span>` : ""}
-        </div>
-        <div class="tl-mt-lane-track" data-vid="${v.id}">
-          ${preTrimHTML}
-          <div class="tl-mt-video-block" data-vid="${v.id}"
-               style="left:${blockLeftPct}%;width:${blockWidthPct}%">
-            <div class="tl-mt-trim-handle left" data-vid="${v.id}" data-edge="left"></div>
-            <div class="tl-mt-trim-handle right" data-vid="${v.id}" data-edge="right"></div>
-          </div>
-          ${postTrimHTML}
-          ${subBlocksHTML}
-          <div class="tl-mt-playhead${isActive ? ' visible' : ''}" data-vid="${v.id}"></div>
-        </div>
-        <div class="tl-mt-lane-dur">${fmtTime(trim.end - trim.start)}</div>
-      </div>`;
-  }).join("");
-
-  // Click on lane → select that video
-  container.querySelectorAll(".tl-mt-lane").forEach(lane => {
-    lane.addEventListener("click", (e) => {
-      // Don't select if clicking the drag handle
-      if (e.target.closest(".tl-mt-lane-handle")) return;
-      selectVideo(lane.dataset.vid);
+  // Click to select clip
+  container.querySelectorAll(".tl-clip").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".tl-clip-trim")) return;
+      selectClip(el.dataset.clipid);
+    });
+    // Mousedown for drag reorder
+    el.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".tl-clip-trim")) return;
+      e.preventDefault();
+      _clipDrag.idx = parseInt(el.dataset.idx);
+      _clipDrag.startX = e.clientX;
+      el.classList.add("dragging");
     });
   });
 
-  // Drag reorder on timeline lanes
-  setupLaneDragReorder(container);
+  // Overlay block drag (slide timelineStart)
+  container.querySelectorAll(".tl-ov-block").forEach(el => {
+    el.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".tl-ov-handle-slide")) return;
+      e.preventDefault();
+      const ov = overlayClips.find(o => o.id === el.dataset.ovid);
+      if (!ov) return;
+      const row = el.closest(".tl-ov-row");
+      _ovTlDrag = {
+        ov, startX: e.clientX,
+        origStart: ov.timelineStart, origEnd: ov.timelineEnd,
+        rowWidth: row ? row.clientWidth : 800,
+        totalDur: Math.max(totalDur, ov.timelineEnd),
+      };
+    });
+  });
 
-  // Trim handle events
-  setupTrimHandles(container);
+  // Overlay trim slide handles (resize in timeline)
+  container.querySelectorAll(".tl-ov-handle-slide").forEach(handle => {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const ov = overlayClips.find(o => o.id === handle.dataset.ovid);
+      if (!ov) return;
+      const row = handle.closest(".tl-ov-row");
+      _ovTlResize = {
+        ov, edge: handle.dataset.edge, startX: e.clientX,
+        origStart: ov.timelineStart, origEnd: ov.timelineEnd,
+        rowWidth: row ? row.clientWidth : 800,
+        totalDur: Math.max(totalDur, ov.timelineEnd),
+      };
+    });
+  });
 
-  // Re-render ruler
+  setupClipTrimHandles();
   renderTimelineRuler($("#timelineRuler"));
 }
 
-function syncMultiTrackPlayhead() {
-  const vid = $("#editorVideo");
-  if (!vid || !vid.duration || isNaN(vid.duration)) return;
+// Backward compat alias — any old code that calls renderMultiTrackTimeline still works
+function renderMultiTrackTimeline() { renderSingleTrackTimeline(); }
 
-  const t = vid.currentTime;
-  const maxDuration = state.editorInfo?.duration || 1;
+// ── Single-track playhead sync ────────────────────────────
+function syncSingleTrackPlayhead() {
+  const playhead = document.getElementById("tlStPlayhead");
+  if (!playhead) return;
+  const clip = getActiveClip();
+  if (!clip) return;
+  const totalDur = getTotalDuration();
+  if (totalDur <= 0) return;
 
-  $$(".tl-mt-playhead").forEach(ph => {
-    const laneVid = ph.dataset.vid;
-    const v = editorVideos.find(v => v.id === laneVid);
-    const pct = v ? (t / v.info.duration) * 100 : (t / maxDuration) * 100;
-    ph.style.left = Math.min(pct, 100) + "%";
-  });
+  let cumStart = 0;
+  for (const c of timelineClips) {
+    if (c.id === activeClipId) break;
+    cumStart += c.trimEnd - c.trimStart;
+  }
+  const offset = Math.max(evsVideo.currentTime - clip.trimStart, 0);
+  const pct = ((cumStart + offset) / totalDur) * 100;
+  playhead.style.left = Math.min(pct, 100) + "%";
 }
 
-// ── Sidebar drag reorder ──────────────────────────────────
-function setupSidebarDragReorder(container) {
-  let dragSrcIdx = -1;
+// Deprecated stub — no longer used
+function syncMultiTrackPlayhead() { syncSingleTrackPlayhead(); }
 
+// ── Sidebar drag reorder — FIXED: persistent state, no stacking listeners ──
+const _sidebarDrag = { idx: -1, container: null };
+
+function setupSidebarDragReorder(container) {
   container.querySelectorAll(".video-sb-drag").forEach(handle => {
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
       const item = handle.closest(".video-sidebar-item");
-      dragSrcIdx = parseInt(item.dataset.idx);
+      _sidebarDrag.idx = parseInt(item.dataset.idx);
+      _sidebarDrag.container = container;
       item.style.opacity = "0.4";
     });
   });
-
-  document.addEventListener("mousemove", (e) => {
-    if (dragSrcIdx < 0) return;
-    // Highlight target
-    container.querySelectorAll(".video-sidebar-item").forEach(el => {
-      el.classList.remove("drop-target");
-    });
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
-    if (target && parseInt(target.dataset.idx) !== dragSrcIdx) {
-      target.classList.add("drop-target");
-    }
-  });
-
-  document.addEventListener("mouseup", (e) => {
-    if (dragSrcIdx < 0) return;
-    const srcItem = container.querySelector(`.video-sidebar-item[data-idx="${dragSrcIdx}"]`);
-    if (srcItem) srcItem.style.opacity = "";
-
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
-    container.querySelectorAll(".video-sidebar-item").forEach(el => el.classList.remove("drop-target"));
-
-    if (target) {
-      const targetIdx = parseInt(target.dataset.idx);
-      if (targetIdx !== dragSrcIdx && targetIdx >= 0) {
-        reorderVideos(dragSrcIdx, targetIdx);
-      }
-    }
-    dragSrcIdx = -1;
-  });
 }
 
-// ── Lane drag reorder on timeline ─────────────────────────
-function setupLaneDragReorder(container) {
-  let dragLaneIdx = -1;
+document.addEventListener("mousemove", (e) => {
+  if (_sidebarDrag.idx < 0 || !_sidebarDrag.container) return;
+  _sidebarDrag.container.querySelectorAll(".video-sidebar-item").forEach(el => el.classList.remove("drop-target"));
+  const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
+  if (target && parseInt(target.dataset.idx) !== _sidebarDrag.idx) target.classList.add("drop-target");
+});
 
-  container.querySelectorAll(".tl-mt-lane-handle").forEach(handle => {
+document.addEventListener("mouseup", (e) => {
+  if (_sidebarDrag.idx < 0 || !_sidebarDrag.container) return;
+  const container = _sidebarDrag.container;
+  const srcItem = container.querySelector(`.video-sidebar-item[data-idx="${_sidebarDrag.idx}"]`);
+  if (srcItem) srcItem.style.opacity = "";
+  const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".video-sidebar-item");
+  container.querySelectorAll(".video-sidebar-item").forEach(el => el.classList.remove("drop-target"));
+  if (target) {
+    const toIdx = parseInt(target.dataset.idx);
+    if (toIdx !== _sidebarDrag.idx && toIdx >= 0) reorderVideos(_sidebarDrag.idx, toIdx);
+  }
+  _sidebarDrag.idx = -1;
+  _sidebarDrag.container = null;
+});
+
+// ── Clip drag reorder in timeline — FIXED: persistent state ──
+const _clipDrag = { idx: -1, startX: 0 };
+
+document.addEventListener("mousemove", (e) => {
+  if (_clipDrag.idx < 0) return;
+  const container = $("#timelineMultiTrack");
+  if (!container) return;
+  container.querySelectorAll(".tl-clip").forEach(el => el.classList.remove("drop-before", "drop-after"));
+  const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-clip");
+  if (target) {
+    const ti = parseInt(target.dataset.idx);
+    if (ti !== _clipDrag.idx) target.classList.add(ti > _clipDrag.idx ? "drop-after" : "drop-before");
+  }
+});
+
+document.addEventListener("mouseup", (e) => {
+  if (_clipDrag.idx < 0) return;
+  const container = $("#timelineMultiTrack");
+  if (container) {
+    container.querySelectorAll(".tl-clip").forEach(el => el.classList.remove("dragging", "drop-before", "drop-after"));
+    // Only reorder if mouse moved enough (not just a click)
+    if (Math.abs(e.clientX - _clipDrag.startX) > 10) {
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-clip");
+      if (target) {
+        const toIdx = parseInt(target.dataset.idx);
+        const fromIdx = _clipDrag.idx;
+        if (toIdx !== fromIdx && toIdx >= 0) {
+          const item = timelineClips.splice(fromIdx, 1)[0];
+          timelineClips.splice(toIdx, 0, item);
+          renderSingleTrackTimeline();
+          toast("Clip reordered ✓", "success");
+        }
+      }
+    }
+  }
+  _clipDrag.idx = -1;
+});
+
+// ── Clip trim handles — persistent global handlers ─────────
+let _clipTrimDrag = null;
+
+function setupClipTrimHandles() {
+  document.querySelectorAll(".tl-clip-trim").forEach(handle => {
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const lane = handle.closest(".tl-mt-lane");
-      dragLaneIdx = parseInt(lane.dataset.idx);
-      lane.classList.add("dragging");
+      const clipId = handle.dataset.clipid;
+      const clip = timelineClips.find(c => c.id === clipId);
+      if (!clip) return;
+      const row = handle.closest(".tl-st-row");
+      _clipTrimDrag = {
+        clipId,
+        edge: handle.dataset.edge,
+        startX: e.clientX,
+        origStart: clip.trimStart,
+        origEnd: clip.trimEnd,
+        rowWidth: row ? row.clientWidth : 800,
+        totalDur: getTotalDuration(),
+      };
     });
   });
+}
 
-  document.addEventListener("mousemove", (e) => {
-    if (dragLaneIdx < 0) return;
-    container.querySelectorAll(".tl-mt-lane").forEach(l => {
-      l.classList.remove("drop-target-above", "drop-target-below");
+document.addEventListener("mousemove", (e) => {
+  if (!_clipTrimDrag) return;
+  const clip = timelineClips.find(c => c.id === _clipTrimDrag.clipId);
+  if (!clip) return;
+  const dx = e.clientX - _clipTrimDrag.startX;
+  const dSec = (dx / _clipTrimDrag.rowWidth) * _clipTrimDrag.totalDur;
+  const minDur = 0.2;
+  if (_clipTrimDrag.edge === "left") {
+    clip.trimStart = Math.max(0, Math.min(_clipTrimDrag.origStart + dSec, clip.trimEnd - minDur));
+  } else {
+    clip.trimEnd = Math.max(clip.trimStart + minDur, Math.min(_clipTrimDrag.origEnd + dSec, clip.info.duration));
+  }
+  // Live update clip width and duration label
+  const clipEl = document.querySelector(`.tl-clip[data-clipid="${clip.id}"]`);
+  if (clipEl) {
+    const totalDur = Math.max(getTotalDuration(), 0.01);
+    const dur = clip.trimEnd - clip.trimStart;
+    clipEl.style.flex = Math.max(dur / totalDur, 0.01);
+    const durEl = clipEl.querySelector(".tl-clip-dur");
+    if (durEl) durEl.textContent = fmtTime(dur);
+  }
+});
+
+document.addEventListener("mouseup", () => {
+  if (!_clipTrimDrag) return;
+  _clipTrimDrag = null;
+  renderSingleTrackTimeline();
+});
+
+// ── Overlay timeline drag (slide & resize in timeline) ─────
+let _ovTlDrag = null;
+let _ovTlResize = null;
+
+document.addEventListener("mousemove", (e) => {
+  if (_ovTlDrag) {
+    const { ov, startX, origStart, origEnd, rowWidth, totalDur } = _ovTlDrag;
+    const dx = ((e.clientX - startX) / rowWidth) * totalDur;
+    const dur = origEnd - origStart;
+    ov.timelineStart = Math.max(0, origStart + dx);
+    ov.timelineEnd = ov.timelineStart + dur;
+    const block = document.querySelector(`.tl-ov-block[data-ovid="${ov.id}"]`);
+    if (block) {
+      const maxDur = Math.max(getTotalDuration(), ov.timelineEnd);
+      block.style.left = (ov.timelineStart / maxDur * 100) + "%";
+    }
+  }
+  if (_ovTlResize) {
+    const { ov, edge, startX, origStart, origEnd, rowWidth, totalDur } = _ovTlResize;
+    const dx = ((e.clientX - startX) / rowWidth) * totalDur;
+    if (edge === "left") {
+      ov.timelineStart = Math.max(0, Math.min(origStart + dx, ov.timelineEnd - 0.5));
+    } else {
+      ov.timelineEnd = Math.max(ov.timelineStart + 0.5, origEnd + dx);
+    }
+    const block = document.querySelector(`.tl-ov-block[data-ovid="${ov.id}"]`);
+    if (block) {
+      const maxDur = Math.max(getTotalDuration(), ov.timelineEnd);
+      block.style.left = (ov.timelineStart / maxDur * 100) + "%";
+      block.style.width = ((ov.timelineEnd - ov.timelineStart) / maxDur * 100) + "%";
+      const durEl = block.querySelector(".tl-ov-dur");
+      if (durEl) durEl.textContent = fmtTime(ov.timelineEnd - ov.timelineStart);
+    }
+  }
+});
+
+document.addEventListener("mouseup", () => {
+  if (_ovTlDrag || _ovTlResize) {
+    _ovTlDrag = null; _ovTlResize = null;
+    renderSingleTrackTimeline();
+  }
+});
+
+// ── Canvas overlay rendering ───────────────────────────────
+let _ovMove = null;
+let _ovResize = null;
+
+function renderCanvasOverlays() {
+  const wrap = $("#canvasFrame");
+  wrap.querySelectorAll(".canvas-overlay").forEach(el => el.remove());
+
+  overlayClips.forEach(ov => {
+    const container = document.createElement("div");
+    container.className = "canvas-overlay";
+    container.id = `ovwrap_${ov.id}`;
+    container.dataset.ovid = ov.id;
+    container.style.cssText = `left:${ov.x}%;top:${ov.y}%;width:${ov.width}%;z-index:${ov.zIndex}`;
+
+    const vid = document.createElement("video");
+    vid.id = `ovvid_${ov.id}`;
+    vid.src = ov.playerSrc || `/api/uploads/${ov.filename}`;
+    vid.muted = !ov.audioEnabled;
+    vid.preload = "metadata";
+    vid.style.cssText = "width:100%;display:block;border-radius:4px;pointer-events:none";
+    container.appendChild(vid);
+
+    // Toolbar
+    const tb = document.createElement("div");
+    tb.className = "ov-toolbar";
+    tb.innerHTML = `
+      <span class="ov-tb-name">${ov.filename}</span>
+      <button class="ov-tb-btn audio${ov.audioEnabled ? ' on' : ''}" data-ovid="${ov.id}" title="Toggle audio">🔊</button>
+      <button class="ov-tb-btn close" data-ovid="${ov.id}" title="Remove overlay">✕</button>`;
+    container.appendChild(tb);
+
+    // 4 corner resize handles + left/right edge handles
+    ["nw","ne","sw","se","e","w"].forEach(edge => {
+      const h = document.createElement("div");
+      h.className = `ov-resize-handle ov-h-${edge}`;
+      h.dataset.ovid = ov.id; h.dataset.edge = edge;
+      container.appendChild(h);
     });
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-mt-lane");
-    if (target && parseInt(target.dataset.idx) !== dragLaneIdx) {
-      const targetIdx = parseInt(target.dataset.idx);
-      target.classList.add(targetIdx > dragLaneIdx ? "drop-target-below" : "drop-target-above");
+
+    wrap.appendChild(container);
+
+    // Drag to move (on container, but not toolbar/handles)
+    container.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".ov-toolbar") || e.target.closest(".ov-resize-handle")) return;
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      _ovMove = { ov, startX: e.clientX, startY: e.clientY, origX: ov.x, origY: ov.y, rect };
+    });
+
+    // Resize handles
+    container.querySelectorAll(".ov-resize-handle").forEach(h => {
+      h.addEventListener("mousedown", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const rect = wrap.getBoundingClientRect();
+        _ovResize = {
+          ov, edge: h.dataset.edge,
+          startX: e.clientX, startY: e.clientY,
+          origX: ov.x, origY: ov.y, origW: ov.width,
+          rect,
+        };
+      });
+    });
+
+    // Toolbar buttons
+    tb.querySelector(".ov-tb-btn.audio").addEventListener("click", (e) => {
+      e.stopPropagation();
+      ov.audioEnabled = !ov.audioEnabled;
+      vid.muted = !ov.audioEnabled;
+      e.target.classList.toggle("on", ov.audioEnabled);
+    });
+    tb.querySelector(".ov-tb-btn.close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeFromOverlay(ov.id);
+    });
+  });
+}
+
+// Overlay move / resize — global handlers (registered once)
+document.addEventListener("mousemove", (e) => {
+  if (_ovMove) {
+    const { ov, startX, startY, origX, origY, rect } = _ovMove;
+    ov.x = Math.max(0, Math.min(origX + ((e.clientX - startX) / rect.width) * 100, 100 - ov.width));
+    ov.y = Math.max(0, Math.min(origY + ((e.clientY - startY) / rect.height) * 100, 95));
+    const c = document.getElementById(`ovwrap_${ov.id}`);
+    if (c) { c.style.left = ov.x + "%"; c.style.top = ov.y + "%"; }
+  }
+  if (_ovResize) {
+    const { ov, edge, startX, startY, origX, origY, origW, rect } = _ovResize;
+    const dx = ((e.clientX - startX) / rect.width) * 100;
+    if (edge.includes("e")) {
+      ov.width = Math.max(10, Math.min(origW + dx, 100 - ov.x));
+    } else if (edge.includes("w")) {
+      const newW = Math.max(10, origW - dx);
+      ov.x = Math.max(0, origX + (origW - newW));
+      ov.width = newW;
+    }
+    const c = document.getElementById(`ovwrap_${ov.id}`);
+    if (c) { c.style.width = ov.width + "%"; c.style.left = ov.x + "%"; }
+  }
+});
+
+document.addEventListener("mouseup", () => { _ovMove = null; _ovResize = null; });
+
+// Overlay playback sync — called from timeupdate
+function syncOverlays(mainT) {
+  overlayClips.forEach(ov => {
+    const vid = document.getElementById(`ovvid_${ov.id}`);
+    if (!vid) return;
+    const active = mainT >= ov.timelineStart && mainT <= ov.timelineEnd;
+    const container = document.getElementById(`ovwrap_${ov.id}`);
+    if (container) container.style.opacity = active ? "1" : "0.2";
+    if (active) {
+      const ovT = Math.min(ov.trimStart + (mainT - ov.timelineStart), ov.trimEnd - 0.05);
+      if (Math.abs(vid.currentTime - ovT) > 0.2) vid.currentTime = ovT;
+      if (!evsVideo.paused && vid.paused) vid.play().catch(() => {});
+    } else {
+      if (!vid.paused) vid.pause();
     }
   });
+}
 
-  document.addEventListener("mouseup", (e) => {
-    if (dragLaneIdx < 0) return;
-    const srcLane = container.querySelector(`.tl-mt-lane[data-idx="${dragLaneIdx}"]`);
-    if (srcLane) srcLane.classList.remove("dragging");
-
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest(".tl-mt-lane");
-    container.querySelectorAll(".tl-mt-lane").forEach(l => {
-      l.classList.remove("drop-target-above", "drop-target-below");
-    });
-
-    if (target) {
-      const targetIdx = parseInt(target.dataset.idx);
-      if (targetIdx !== dragLaneIdx && targetIdx >= 0) {
-        reorderVideos(dragLaneIdx, targetIdx);
-      }
-    }
-    dragLaneIdx = -1;
-  });
+// ── Split clip at playhead ────────────────────────────────
+function splitClipAtPlayhead() {
+  const clip = getActiveClip();
+  if (!clip) { toast("No clip selected", "error"); return; }
+  const splitAt = evsVideo.currentTime;  // absolute time in source video
+  const minGap = 0.3;
+  if (splitAt <= clip.trimStart + minGap || splitAt >= clip.trimEnd - minGap) {
+    toast("Move playhead inside the clip to split", "warn");
+    return;
+  }
+  clipCounter++;
+  const clipA = { ...clip, trimEnd: splitAt };
+  const clipB = { ...clip, id: `clip_${clipCounter}`, trimStart: splitAt };
+  const idx = timelineClips.findIndex(c => c.id === clip.id);
+  timelineClips.splice(idx, 1, clipA, clipB);
+  activeClipId = clipA.id;
+  renderSingleTrackTimeline();
+  toast("Clip split ✓", "success");
 }
 
 function reorderVideos(fromIdx, toIdx) {
@@ -1013,7 +1460,7 @@ function reorderVideos(fromIdx, toIdx) {
   editorVideos.splice(toIdx, 0, item);
   editorVideos.forEach((v, i) => { v.order = i; });
   renderVideoList();
-  renderMultiTrackTimeline();
+  renderSingleTrackTimeline();
   toast("Videos reordered ✓", "success");
 }
 
@@ -1165,6 +1612,7 @@ async function editorOpenWorkspace(path, filename) {
 }
 
 $("#btnGenThumbs").addEventListener("click", editorGenThumbs);
+$("#btnSplitClip").addEventListener("click", splitClipAtPlayhead);
 
 async function editorGenThumbs() {
   if (!state.editorInfo) return;
@@ -1731,10 +2179,36 @@ evsVideo.addEventListener("timeupdate", () => {
   updateEvsTime();
   syncEvsOverlay();
   syncTimelinePlayhead();
-  syncMultiTrackPlayhead();
+  syncSingleTrackPlayhead();
+  syncOverlays(evsVideo.currentTime);
+
+  // Enforce clip trimEnd — advance to next clip when boundary is reached
+  const activeClip = getActiveClip();
+  if (activeClip && !evsVideo.paused && evsVideo.currentTime >= activeClip.trimEnd - 0.08) {
+    const idx = timelineClips.findIndex(c => c.id === activeClipId);
+    if (idx >= 0 && idx < timelineClips.length - 1) {
+      const nextClip = timelineClips[idx + 1];
+      selectClip(nextClip.id);
+      evsVideo.addEventListener("loadedmetadata", () => evsVideo.play(), { once: true });
+    } else {
+      evsVideo.pause();
+    }
+  }
 });
-evsVideo.addEventListener("play",  () => { $("#evsPlayBtn").textContent = "⏸"; });
-evsVideo.addEventListener("pause", () => { $("#evsPlayBtn").textContent = "▶"; });
+evsVideo.addEventListener("play",  () => {
+  $("#evsPlayBtn").textContent = "⏸";
+  overlayClips.forEach(ov => {
+    if (evsVideo.currentTime >= ov.timelineStart && evsVideo.currentTime <= ov.timelineEnd) {
+      document.getElementById(`ovvid_${ov.id}`)?.play().catch(() => {});
+    }
+  });
+});
+evsVideo.addEventListener("pause", () => {
+  $("#evsPlayBtn").textContent = "▶";
+  overlayClips.forEach(ov => {
+    document.getElementById(`ovvid_${ov.id}`)?.pause();
+  });
+});
 
 $("#evsPlayBtn").addEventListener("click", () => {
   if (evsVideo.paused) evsVideo.play(); else evsVideo.pause();
@@ -1845,7 +2319,7 @@ evsDragHandle.addEventListener("mousedown", (e) => {
 });
 document.addEventListener("mousemove", (e) => {
   if (!editorSubs.dragging) return;
-  const wrap = $("#evsVideoWrap");
+  const wrap = $("#canvasFrame");
   const r = wrap.getBoundingClientRect();
   editorSubs.style.position_x_pct = Math.max(0.05, Math.min(0.95, (e.clientX - editorSubs.dragOffset.x - r.left) / r.width));
   editorSubs.style.position_y_pct = Math.max(0.05, Math.min(0.95, (e.clientY - editorSubs.dragOffset.y - r.top)  / r.height));
@@ -2201,6 +2675,20 @@ function updateWorkingVideo(outputPath, filename, action, rawCmd) {
   editorVideoPath = outputPath;
   editorVideoFilename = fname;
 
+  // Set playerSrc so loadActiveVideoIntoPlayer uses the correct endpoint (output dir, not uploads)
+  const av = getActiveVideo();
+  if (av) {
+    av.playerSrc = `/api/serve-output/${fname}?t=${Date.now()}`;
+    // Sync all timeline clips that reference this video
+    timelineClips.forEach(c => {
+      if (c.videoId === av.id) {
+        c.path = outputPath;
+        c.filename = fname;
+        c.playerSrc = av.playerSrc;
+      }
+    });
+  }
+
   // Reload video player
   const vid = $("#editorVideo");
   const wasPlaying = !vid.paused;
@@ -2260,11 +2748,11 @@ function renderProcessingHistory() {
   }
 
   const exportBtn = $("#btnExportFinal");
-  if (exportBtn) exportBtn.disabled = processingHistory.length === 0;
+  if (exportBtn) exportBtn.disabled = timelineClips.length === 0;
 }
 
 async function exportAllVideos() {
-  if (editorVideos.length === 0) { toast("Nothing to export", "error"); return; }
+  if (timelineClips.length === 0) { toast("Nothing to export", "error"); return; }
 
   const btn = $("#btnExportFinal");
   const resultDiv = $("#cmdResult");
@@ -2274,13 +2762,13 @@ async function exportAllVideos() {
   resultDiv.innerHTML = '<span style="color:var(--accent)">⏳ Processing all videos...</span>';
 
   try {
-    // Build payload: each video with its trim + subtitles
-    const payload = editorVideos.map(v => ({
-      path: v.path,
-      trimStart: v.trimStart || 0,
-      trimEnd: v.trimEnd || v.info.duration,
-      subtitles: v.subtitles.transcribed ? {
-        segments: v.subtitles.segments,
+    // Build payload from timeline clips (ordered sequence with per-clip trim)
+    const payload = timelineClips.map(c => ({
+      path: c.path,
+      trimStart: c.trimStart,
+      trimEnd: c.trimEnd,
+      subtitles: c.subtitles?.transcribed ? {
+        segments: c.subtitles.segments,
         style: {
           font_size: editorSubs.style.font_size,
           position_x_pct: editorSubs.style.position_x_pct,
@@ -2299,7 +2787,22 @@ async function exportAllVideos() {
       } : null,
     }));
 
-    const concatResult = await api("/api/export/concat", { videos: payload });
+    const overlayPayload = overlayClips.map(ov => ({
+      path: ov.path,
+      trimStart: ov.trimStart,
+      trimEnd: ov.trimEnd,
+      timelineStart: ov.timelineStart,
+      timelineEnd: ov.timelineEnd,
+      x_pct: ov.x,
+      y_pct: ov.y,
+      width_pct: ov.width,
+      audioEnabled: ov.audioEnabled,
+    }));
+    const concatResult = await api("/api/export/concat", {
+      videos: payload,
+      overlays: overlayPayload,
+      output_format: activeFormat !== "free" ? activeFormat : null,
+    });
 
     if (concatResult.error) {
       throw new Error(concatResult.error);
@@ -2321,7 +2824,7 @@ async function exportAllVideos() {
       }, 1500);
     });
 
-    const subsCount = editorVideos.filter(v => v.subtitles.transcribed).length;
+    const subsCount = timelineClips.filter(c => c.subtitles?.transcribed).length;
     resultDiv.classList.add("success");
     resultDiv.innerHTML = `
       <div class="cmd-msg">✅ ${jobResult.video_count} videos concatenados</div>
@@ -2460,6 +2963,13 @@ async function runCommand() {
 
 // ── Export All ────────────────────────────────────────
 $("#btnExportFinal").addEventListener("click", exportAllVideos);
+
+// ── Format selector ───────────────────────────────────
+document.querySelectorAll(".fmt-btn").forEach(btn => {
+  btn.addEventListener("click", () => setCanvasFormat(btn.dataset.format));
+});
+// Apply default format on load
+setCanvasFormat(activeFormat);
 
 // ── Init ─────────────────────────────────────────────────
 console.log("YT Clipper ready ✂️ | YouTube · Subtitles · Editor");
